@@ -32,16 +32,34 @@ export default function AdminView({ user, onLogout }) {
 
 function TenantTransaction() {
 
-    const handleFileUpload = (file) => {
-        console.log("Uploading file!");
+    const handleFileUpload = async (file) => {
+        try {
+            console.log("Uploading file!");
+            const formData = new FormData();
+            formData.append("transact", file);
 
-        // Back-end logic here
+            const response = await fetch("http://localhost:5000/upload", {
+            method: "POST",
+            body: formData,
+            });
+
+            if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(errText);
+            }
+
+            const data = await response.json();
+            console.log(data);
+        } catch (err) {
+            console.error("Upload failed:", err);
+        }
     }
 
     return (
         <div className="w-full h-full flex justify-center items-center relative">
             <p className="absolute top-0 pt-24 text-7xl font-extralight">Import Transaction Data</p>
             <FileUpload onUpload={handleFileUpload} />
+
         </div>
     )
 }
@@ -58,6 +76,7 @@ function ScreeningData() {
         <div className="w-full h-full flex justify-center items-center relative">
             <p className="absolute top-0 pt-24 text-7xl font-extralight">Import Screening Data</p>
             <FileUpload onUpload={handleFileUpload} />
+   
         </div>
     )
 }
