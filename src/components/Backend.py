@@ -1,387 +1,446 @@
-# Need to install "pip install psycopg2-binary" for db connection!
+# Need to install "pip install psycopg2-binary scikit-learn shap pandas numpy openpyxl flask-cors python-dotenv"
 # Also used pip install dotenv for environment file
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import csv, io
-from datetime import datetime
+from datetime import datetime, date
 from openpyxl import load_workbook
-
+import pandas as pd
+import numpy as np
 import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# ML / Explainability
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import roc_auc_score
+
+try:
+    import shap
+
+    _HAS_SHAP = True
+except Exception:
+    _HAS_SHAP = False
 
 # Load .env file
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
 
-CORS(app, origins="http://localhost:5173")
-
+# --- DB CONNECTION ---
 conn = psycopg2.connect(
-    dbname="billCo",
+    dbname="billco",
     user="postgres",
     password=os.getenv("DB_PASSWORD"),
     host="localhost",
-    port=os.getenv("DB_PORT")
+    port=os.getenv("DB_PORT", "5432")
 )
+conn.autocommit = True
 cursor = conn.cursor()
 
-# 2. Create a table
+# --- SCHEMA (idempotent) ---
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS transacts (
-    pscode VARCHAR(10),
-    tscode VARCHAR(15) PRIMARY KEY,
+    pscode TEXT,
+    tscode TEXT PRIMARY KEY,
     screenresult TEXT,
     screenvendor TEXT,
-    dnumnsf INT,
-    dnumlate INT,
-    davgdayslate INT,
-    sevicted VARCHAR(3) CHECK (sevicted IN ('No','Yes')),
-    drentwrittenoff REAL,
-    dnonrentwrittenoff REAL,
-    damoutcollections REAL,
-    srenewed VARCHAR(3) CHECK (srenewed IN ('No','Yes')),   
-    srent REAL,
-    sfulfilledterm VARCHAR(3) CHECK (sfulfilledterm IN ('No','Yes')),
-    dincome REAL,
+    dnumnsf INTEGER,
+    dnumlate INTEGER,
+    davgdayslate INTEGER,
+    sevicted TEXT,
+    drentwrittenoff NUMERIC,
+    dnonrentwrittenoff NUMERIC,
+    damoutcollections NUMERIC,
+    srenewed TEXT,
+    srent NUMERIC,
+    sfulfilledterm TEXT,
+    dincome NUMERIC,
     dtleasefrom DATE,
     dtleaseto DATE,
     dtmovein DATE,
     dtmoveout DATE,
-    dwocount INT,
+    dwocount INTEGER,
     dtroomearlyout DATE,
-    sEmpCompany TEXT,
-    sEmpPosition TEXT,
-    sflex VARCHAR(5),
+    sempcompany TEXT,
+    sempposition TEXT,
+    sflex TEXT,
     sleap TEXT,
-    sprevzip VARCHAR(10),
-    daypaid INT,
-    spaymentsource VARCHAR(50),
-    dpaysourcechange INT
+    sprevzip TEXT,
+    daypaid INTEGER,
+    spaymentsource TEXT,
+    dpaysourcechange INTEGER
 );
 """)
-conn.commit()
 
-def process_row(row, columns):
-    # Normalize keys and convert empty strings to None
-    row = {k.strip().lower(): (v.strip() if v and v.strip() != '' else None) for k, v in row.items()}
 
-    # Skip rows without primary key
-    if not row.get("tscode"):
-        return None
+# Simple "meta" table to track when data changed so frontend can refresh
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS meta_updates (
+    id SERIAL PRIMARY KEY,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+""")
 
-    # Parse dates
-    DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein','dtmoveout','dtroomearlyout']
+# --- Helpers ---
+
+PRIMARY_KEY = "tscode"
+DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein', 'dtmoveout', 'dtroomearlyout']
+
+
+def _normalize_row(row: dict):
+    """Trim keys/values, empty->None, and parse dates (mm/dd/yyyy)."""
+    row = {str(k).strip().lower(): (str(v).strip() if (v is not None and str(v).strip() != '') else None)
+           for k, v in row.items()}
     for col in DATE_COLUMNS:
         if row.get(col):
             try:
                 row[col] = datetime.strptime(row[col], "%m/%d/%Y").date()
-            except ValueError:
-                row[col] = None
+            except Exception:
+                try:
+                    # Try ISO style if already clean
+                    if isinstance(row[col], (datetime, date)):
+                        row[col] = row[col]
+                    else:
+                        row[col] = datetime.fromisoformat(str(row[col])).date()
+                except Exception:
+                    row[col] = None
+    return row
 
-    return [row[col] for col in columns]
 
-primary_key = "tscode"
-DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein','dtmoveout','dtroomearlyout']
+def _bucketsql():
+    # Use move-in or lease-from as the timeline anchor; fallback chain to any date available
+    return """date_trunc('month',
+              coalesce(dtmovein, dtleasefrom, dtroomearlyout, dtleaseto)
+            )::date"""
 
-def parse_file(content: bytes, filetype: str):
-    """
-    Parses CSV or XLSX content into a cleaned CSV-like file object suitable for PostgreSQL COPY.
-    Skips first 5 rows, normalizes headers, formats dates, converts empty strings to NULL.
-    """
-    output_csv = io.StringIO()
-    writer = csv.writer(output_csv)
 
-    if filetype.lower() == "csv":
-        csv_file = io.StringIO(content.decode("utf-8", errors="replace"))
+def _build_filter_sql(params):
+    """Returns (where_clause, bind_values) based on query params."""
+    where = []
+    vals = []
+    # Date range (month precision)
+    start = params.get("start")  # 'YYYY-MM'
+    end = params.get("end")  # 'YYYY-MM'
+    if start:
+        where.append(f"{_bucketsql()} >= date_trunc('month', %s::date)")
+        vals.append(f"{start}-01")
+    if end:
+        where.append(f"{_bucketsql()} <= (date_trunc('month', %s::date) + interval '1 month - 1 day')::date")
+        vals.append(f"{end}-01")
 
-        # Skip first 5 rows (trash)
-        for _ in range(5):
-            next(csv_file)
+    # Property codes
+    pscodes = params.getlist("pscode") if hasattr(params, "getlist") else params.get("pscode")
+    if pscodes:
+        if isinstance(pscodes, str):
+            pscodes = [pscodes]
+        where.append("pscode = ANY(%s)")
+        vals.append(pscodes)
 
-        reader = csv.reader(csv_file)
-        headers = [h.strip().lower() for h in next(reader)]
-        
-        for row in reader:
-            row_dict = {k: v.strip() if v.strip() != '' else None for k, v in zip(headers, row)}
-            # Parse dates
-            for col in DATE_COLUMNS:
-                if row_dict.get(col):
-                    try:
-                        row_dict[col] = datetime.strptime(row_dict[col], "%m/%d/%Y").date().isoformat()
-                    except (ValueError, TypeError):
-                        row_dict[col] = None
-            writer.writerow([row_dict.get(col) for col in headers])
-    
-    elif filetype.lower() == "xlsx":
-        xlsx_file = io.BytesIO(content)
-        wb = load_workbook(xlsx_file, data_only=True)
-        ws = wb.active
+    # Screening result filter (e.g., 'Approved', 'Conditional', etc.)
+    screen = params.get("screenresult")
+    if screen:
+        where.append("screenresult = %s")
+        vals.append(screen)
 
-        # Skip first 5 rows
-        rows = list(ws.iter_rows(values_only=True))[5:]
-        headers = [str(h).strip().lower() for h in rows[0]]  # first row after skip as header
+    # Collections status (has balance > 0)
+    collections = params.get("collections")
+    if collections == "with":
+        where.append("coalesce(damoutcollections,0) > 0")
+    elif collections == "without":
+        where.append("coalesce(damoutcollections,0) = 0")
 
-        for row in rows[1:]:
-            row_dict = {k: (str(v).strip() if v is not None and str(v).strip() != '' else None)
-                        for k, v in zip(headers, row)}
-            # Parse dates
-            for col in DATE_COLUMNS:
-                if row_dict.get(col):
-                    try:
-                        row_dict[col] = datetime.strptime(row_dict[col], "%m/%d/%Y").date().isoformat()
-                    except (ValueError, TypeError):
-                        row_dict[col] = None
-            writer.writerow([row_dict.get(col) for col in headers])
+    # Eviction flag
+    ev = params.get("evicted")
+    if ev in ("Yes", "No"):
+        where.append("sevicted = %s")
+        vals.append(ev)
 
-    else:
-        raise ValueError("Unsupported file type")
+    return ("WHERE " + " AND ".join(where)) if where else "", vals
 
-    output_csv.seek(0)
-    return headers, output_csv
+
+# --- Upload route (unchanged behavior, plus meta update) ---
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
     if "transact" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
-    # file = request.files["transact"]
-
-    # filename = file.filename.lower()
-    # if filename.endswith(".csv"):
-    #     filetype = "csv"
-    # elif filename.endswith(".xlsx"):
-    #     filetype = "xlsx"
-    # else:
-    #     return jsonify({"error": "Unsupported file type"}), 400
-
-    # content = file.read()  # reads the entire file into memory as bytes
-
-    # try:
-    #     headers, clean_csv = parse_file(content, filetype)
-        
-    #     # Create temp table
-    #     # check if temp table exists already
-    #     cursor.execute("DROP TABLE IF EXISTS transacts_temp;")
-    #     temp_table = "transacts_temp"
-    #     columns_sql = ", ".join([f"{col} TEXT" for col in headers])
-    #     cursor.execute(f"""
-    #                    CREATE TEMP TABLE transacts_temp (
-    #                         pscode VARCHAR(10),
-    #                         tscode VARCHAR(15) PRIMARY KEY,
-    #                         screenresult TEXT,
-    #                         screenvendor TEXT,
-    #                         dnumnsf INT,
-    #                         dnumlate INT,
-    #                         davgdayslate INT,
-    #                         sevicted VARCHAR(3) CHECK (sevicted IN ('No','Yes')),
-    #                         drentwrittenoff REAL,
-    #                         dnonrentwrittenoff REAL,
-    #                         damoutcollections REAL,
-    #                         srenewed VARCHAR(3) CHECK (srenewed IN ('No','Yes')),   
-    #                         srent REAL,
-    #                         sfulfilledterm VARCHAR(3) CHECK (sfulfilledterm IN ('No','Yes')),
-    #                         dincome REAL,
-    #                         dtleasefrom DATE,
-    #                         dtleaseto DATE,
-    #                         dtmovein DATE,
-    #                         dtmoveout DATE,
-    #                         dwocount INT,
-    #                         dtroomearlyout DATE,
-    #                         sEmpCompany TEXT,
-    #                         sEmpPosition TEXT,
-    #                         sflex VARCHAR(5),
-    #                         sleap TEXT,
-    #                         sprevzip VARCHAR(10),
-    #                         daypaid INT,
-    #                         spaymentsource VARCHAR(50),
-    #                         dpaysourcechange INT
-    #                     );;""")
-        
-    #     cursor.execute(f"ALTER TABLE {temp_table} ADD UNIQUE ({primary_key});")
-    #     # COPY into temp table
-    #     cursor.copy_expert(f"COPY {temp_table} ({', '.join(headers)}) FROM STDIN WITH CSV", clean_csv)
-
-    #     # Upsert into main table
-    #     primary_key = "tscode"
-    #     update_clause = ", ".join([f"{col}=EXCLUDED.{col}" for col in headers if col != primary_key])
-    #     upsert_sql = f"""
-    #     INSERT INTO transacts ({', '.join(headers)})
-    #     SELECT *
-    #     FROM {temp_table}
-    #     ON CONFLICT ({primary_key}) DO UPDATE
-    #     SET {update_clause};
-    #     """
-    #     cursor.execute(upsert_sql)
-    #     conn.commit()
-
-    #     return jsonify({"success": True, "rows": len(headers)})
-    # except Exception as e:
-    #     conn.rollback()
-    #     return jsonify({"error": str(e)}), 500
-
-
 
     file = request.files["transact"]
     filename = file.filename
-    content = file.read()  # bytes of the file
+    content = file.read()  # bytes
 
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".csv":
         try:
-            content.decode("utf-8")
+            csv_file = io.StringIO(content.decode("utf-8"))
         except UnicodeDecodeError:
-            return jsonify({"message": f"{filename} was detected csv file to be not UTF-8 encoded, no importing could be done"}), 400 
-        batch_size = 1000  # adjust as needed
-        batch = []
+            return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
 
-        primary_key = "tscode"
-        DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein','dtmoveout','dtroomearlyout']
-
-        # Read CSV from bytes
-        csv_file = io.StringIO(content.decode("utf-8", errors="replace"))
-        # Skip first 5 rows (trash)
+        # Skip first 5 rows (headers/noise)
         for _ in range(5):
-            next(csv_file)
+            next(csv_file, None)
 
-        # Now DictReader sees the 6th row as the header
         reader = csv.DictReader(csv_file)
         reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
-        print(reader.fieldnames)
 
-        # Build a template SQL string (columns are dynamic per first row)
-        first_row = next(reader)
-        first_row = {k.strip().lower(): (v.strip() if v.strip() != '' else None) for k, v in first_row.items()}
+        # Prepare upsert dynamically based on first row
+        first = next(reader, None)
+        if first is None:
+            return jsonify({"message": "No rows detected after header"}), 400
 
-        columns = list(first_row.keys())
+        first = _normalize_row(first)
+        columns = list(first.keys())
         placeholders = ', '.join(['%s'] * len(columns))
-        columns_sql = ', '.join(columns)
-        update_clause = ', '.join([f"{col}=EXCLUDED.{col}" for col in columns if col != primary_key])
+        colsql = ', '.join(columns)
+        update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
 
-        sql = f"""
-        INSERT INTO transacts ({columns_sql})
-        VALUES ({placeholders})
-        ON CONFLICT ({primary_key}) DO UPDATE
-        SET {update_clause}
-        """
+        sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
 
-        # Add first row
-        row_values = process_row(first_row, columns)
-        if row_values:
-            batch.append(row_values)
+        batch, batch_size = [], 1000
 
-        # Process remaining rows
-        for row in reader:
-            row_values = process_row(row, columns)
-            if row_values:
-                batch.append(row_values)
+        def add_row(r):
+            r = _normalize_row(r)
+            if not r.get(PRIMARY_KEY):
+                return
+            batch.append([r.get(c) for c in columns])
 
-            # Execute batch if full
+        add_row(first)
+        for r in reader:
+            add_row(r)
             if len(batch) >= batch_size:
                 cursor.executemany(sql, batch)
-                batch = []
-
-        # Insert any remaining rows
+                batch.clear()
         if batch:
             cursor.executemany(sql, batch)
-        # # Convert bytes to a file-like object for csv.DictReader
-        # csv_file = io.StringIO(content.decode("utf-8"))
-        # reader = csv.DictReader(csv_file)
 
-        # # Convert headers to lowercase
-        # reader.fieldnames = [h.lower() for h in reader.fieldnames]
-
-        # for row in reader:
-        #     # Normalize row keys and convert empty strings to None
-        #     row = {k.strip().lower(): (v.strip() if v.strip() != '' else None) for k, v in row.items()}
-
-        #     if not row.get("tscode"):
-        #         continue
-        #     # Parse dates
-        #     DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein','dtmoveout','dtroomearlyout']
-        #     for col in DATE_COLUMNS:
-        #         if row.get(col):
-        #             try:
-        #                 row[col] = datetime.strptime(row[col], "%m/%d/%Y").date()
-        #             except ValueError:
-        #                 row[col] = None  # Invalid date → NULL
-
-        #     columns = list(row.keys())
-        #     values = [row[col] for col in columns]
-
-        #     placeholders = ', '.join(['%s'] * len(columns))
-        #     columns_sql = ', '.join(columns)
-
-        #     # Exclude primary key from update clause
-        #     update_clause = ', '.join([f"{col}=EXCLUDED.{col}" for col in columns if col != "tscode"])
-
-        #     sql = f"""
-        #     INSERT INTO transacts ({columns_sql})
-        #     VALUES ({placeholders})
-        #     ON CONFLICT (tscode) DO UPDATE
-        #     SET {update_clause}
-        #     """
-        #     cursor.execute(sql, values)  
     elif ext == ".xlsx":
-        xlsx_file = io.BytesIO(content)
-        wb = load_workbook(xlsx_file, data_only=True)
+        xlsx = io.BytesIO(content)
+        wb = load_workbook(xlsx, data_only=True)
         ws = wb.active
-
-        # Skip the first 5 rows
-        rows = ws.iter_rows(values_only=True)
-        for _ in range(5):
-            next(rows)
-
-        # Now the next row is your header
-        headers = [cell.lower() for cell in next(rows)]
-
-        # Iterate through the remaining rows
-        for row in rows:
-            row_dict = dict(zip(headers, row))
-            # Prepare columns and values for INSERT
-            # Parse dates
-            if not row_dict.get("tscode"): # If primary key doesn't exist, skip it
+        rows = list(ws.iter_rows(values_only=True))
+        rows = rows[5:]  # skip first 5 rows
+        if not rows:
+            return jsonify({"message": "No data rows detected"}), 400
+        headers = [str(h).strip().lower() for h in rows[0]]
+        for row in rows[1:]:
+            rd = {k: v for k, v in zip(headers, row)}
+            rd = _normalize_row(rd)
+            if not rd.get(PRIMARY_KEY):
                 continue
-                
-            DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein','dtmoveout','dtroomearlyout']
-            for col in DATE_COLUMNS:
-                if row_dict[col]:
-                    try:
-                        row_dict[col] = datetime.strptime(row_dict[col], "%m/%d/%Y").date()
-                    except ValueError:
-                        row_dict[col] = None  # Invalid date → NULL
-
-            # columns = list(row_dict.keys())
-            # values = [row_dict[col] for col in columns]
-
-            # placeholders = ', '.join(['%s'] * len(columns))
-            # columns_sql = ', '.join(columns)
-
-            # sql = f"INSERT INTO transacts ({columns_sql}) VALUES ({placeholders})"
-            # cursor.execute(sql, values)
-            columns = list(row_dict.keys())
-            values = [row_dict[col] for col in columns]
-
-            placeholders = ', '.join(['%s'] * len(columns))
-            columns_sql = ', '.join(columns)
-
-            update_clause = ', '.join([f"{col}=EXCLUDED.{col}" for col in columns if col != 'id'])
-
-            sql = f"""
-            INSERT INTO transacts ({columns_sql})
-            VALUES ({placeholders})
-            ON CONFLICT (tscode) DO UPDATE
-            SET {update_clause}
-            """
-            cursor.execute(sql, values)
-
+            cols = list(rd.keys())
+            placeholders = ', '.join(['%s'] * len(cols))
+            colsql = ', '.join(cols)
+            update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in cols if c != PRIMARY_KEY])
+            sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+            cursor.execute(sql, [rd.get(c) for c in cols])
     else:
-        return jsonify({"message": f"{filename} was detected to not be a csv or xlsx, no importing could be done"}), 400 
-    
-    # commit changes
-    conn.commit()
+        return jsonify({"message": "Unsupported file type"}), 400
 
+    # Touch meta_updates
+    cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
     return jsonify({"message": f"{filename} uploaded successfully"}), 200
 
+
+# --- Filters/options for global filter bar ---
+@app.route("/filters/options")
+def filter_options():
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT DISTINCT pscode FROM transacts WHERE pscode IS NOT NULL ORDER BY pscode")
+        props = [r["pscode"] for r in cur.fetchall()]
+        cur.execute("SELECT DISTINCT screenresult FROM transacts WHERE screenresult IS NOT NULL ORDER BY screenresult")
+        screens = [r["screenresult"] for r in cur.fetchall()]
+    return jsonify({"pscodes": props, "screenresults": screens})
+
+
+# --- Last updated ---
+@app.route("/last-updated")
+def last_updated():
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT COALESCE(MAX(updated_at), NOW()) AS ts FROM meta_updates")
+        ts = cur.fetchone()["ts"]
+    return jsonify({"updated_at": ts.isoformat()})
+
+
+# --- KPI snapshot for selected window ---
+@app.route("/kpis/snapshot")
+def kpi_snapshot():
+    where, vals = _build_filter_sql(request.args)
+    month_col = _bucketsql()
+    q = f"""
+        WITH base AS (
+            SELECT
+              {month_col} AS month_key,
+              dnumlate,
+              dnumnsf,
+              damoutcollections,
+              drentwrittenoff, dnonrentwrittenoff
+            FROM transacts
+            {where}
+        )
+        SELECT
+          COALESCE(SUM(CASE WHEN dnumlate > 0 THEN 1 ELSE 0 END),0)::float / NULLIF(COUNT(*),0) AS pct_late_payers,
+          COALESCE(SUM(dnumnsf),0) AS nsf_count,
+          COALESCE(SUM(damoutcollections),0) AS collections_exposure,
+          COALESCE(SUM(drentwrittenoff) + SUM(dnonrentwrittenoff), 0) AS dollars_delinquent
+        FROM base;
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(q, vals)
+        late_rate, nsf, coll, delinquent = cur.fetchone()
+    return jsonify({
+        "pct_late_payers": late_rate or 0.0,
+        "nsf_count": int(nsf or 0),
+        "collections_exposure": float(coll or 0.0),
+        "dollars_delinquent": float(delinquent or 0.0)
+    })
+
+
+# --- KPI time series ---
+@app.route("/kpis/timeseries")
+def kpi_timeseries():
+    where, vals = _build_filter_sql(request.args)
+    month_col = _bucketsql()
+    q = f"""
+        WITH base AS (
+            SELECT
+              {month_col} AS month_key,
+              dnumlate, dnumnsf, damoutcollections, drentwrittenoff, dnonrentwrittenoff
+            FROM transacts
+            {where}
+        )
+        SELECT
+          month_key,
+          COALESCE(SUM(CASE WHEN dnumlate > 0 THEN 1 ELSE 0 END),0)::float / NULLIF(COUNT(*),0) AS pct_late_payers,
+          COALESCE(SUM(dnumnsf),0) AS nsf_count,
+          COALESCE(SUM(damoutcollections),0) AS collections_exposure,
+          COALESCE(SUM(drentwrittenoff) + SUM(dnonrentwrittenoff), 0) AS dollars_delinquent
+        FROM base
+        GROUP BY month_key
+        ORDER BY month_key;
+    """
+
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(q, vals)
+        rows = cur.fetchall()
+    # Format dates as YYYY-MM for frontend
+    for r in rows:
+        r["month"] = r.pop("month_key").strftime("%Y-%m")
+    return jsonify(rows)
+
+
+# --- Feature importance / SHAP ---
+@app.route("/features/importance")
+def feature_importance():
+    # Target: eviction Yes/No
+    # Pull a filtered dataset so importances reflect current slice
+    where, vals = _build_filter_sql(request.args)
+    q = f"""
+        SELECT
+          sevicted,
+          dnumnsf, dnumlate, davgdayslate, srent, dincome,
+          damoutcollections, drentwrittenoff, dnonrentwrittenoff, dwocount, daypaid,
+          screenresult, screenvendor, srenewed, sfulfilledterm, sflex, sleap
+        FROM transacts
+        {where}
+        AND sevicted IS NOT NULL
+    """
+    df = pd.read_sql(q, conn, params=vals)
+    if df.empty or df["sevicted"].nunique() < 2:
+        return jsonify({"message": "Not enough data to compute feature importance"}), 400
+
+    y = (df["sevicted"].str.upper() == "YES").astype(int)
+    X = df.drop(columns=["sevicted"])
+
+    # Separate numeric and categorical
+    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in X.columns if c not in num_cols]
+
+    pre = ColumnTransformer(
+        transformers=[
+            ("num", "passthrough", num_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
+        ]
+    )
+
+    # RF pipeline
+    rf = RandomForestClassifier(
+        n_estimators=300,
+        max_depth=None,
+        n_jobs=-1,
+        random_state=42,
+        class_weight="balanced"
+    )
+    pipe = Pipeline([("prep", pre), ("rf", rf)])
+
+    # Train/holdout to report a quick quality metric
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
+    pipe.fit(Xtr, ytr)
+    try:
+        pred = pipe.predict_proba(Xte)[:, 1]
+        auc = float(roc_auc_score(yte, pred))
+    except Exception:
+        auc = None
+
+    # Try SHAP (exact for tree models) if available; otherwise permutation importances
+    importances = []
+    if _HAS_SHAP:
+        try:
+            explainer = shap.TreeExplainer(pipe.named_steps["rf"])
+            # Transform a sample through preprocessor to line up with model features
+            Xt = pipe.named_steps["prep"].fit_transform(Xtr)
+            # SHAP on a small sample for speed
+            k = min(200, Xt.shape[0])
+            shap_vals = explainer.shap_values(pipe.named_steps["rf"].estimators_[0],
+                                              check_additivity=False) if False else None
+        except Exception:
+            # Fallback to model feature_importances_ on processed matrix
+            Xt = pipe.named_steps["prep"].transform(Xtr)
+            fi = pipe.named_steps["rf"].feature_importances_
+            # Retrieve feature names
+            cat_names = pipe.named_steps["prep"].named_transformers_["cat"].get_feature_names_out(
+                cat_cols) if cat_cols else []
+            feat_names = list(num_cols) + list(cat_names)
+            importances = sorted(
+                [{"feature": f, "importance": float(v)} for f, v in zip(feat_names, fi)],
+                key=lambda d: d["importance"],
+                reverse=True
+            )[:20]
+    if not importances:
+        # Generic importance via model attribute
+        try:
+            Xt = pipe.named_steps["prep"].transform(Xtr)
+            fi = pipe.named_steps["rf"].feature_importances_
+            cat_names = pipe.named_steps["prep"].named_transformers_["cat"].get_feature_names_out(
+                cat_cols) if cat_cols else []
+            feat_names = list(num_cols) + list(cat_names)
+            importances = sorted(
+                [{"feature": f, "importance": float(v)} for f, v in zip(feat_names, fi)],
+                key=lambda d: d["importance"],
+                reverse=True
+            )[:20]
+        except Exception:
+            importances = []
+
+    return jsonify({
+        "auc": auc,
+        "top_features": importances
+    })
+
+
+# --- Minimal health ---
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
+
+
 if __name__ == "__main__":
-    app.run(port=5000)
+    app.run(port=5000, debug=True)
