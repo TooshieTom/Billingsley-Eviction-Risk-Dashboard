@@ -1,10 +1,39 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import axios from "axios"
 
 export default function Register() {
+    const navigate = useNavigate();
 
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+
+    const handleRegister = async (e) => {
+        e.preventDefault();
+
+        try {
+            const response = await axios.post(
+                "http://127.0.0.1:5000/register",
+                {
+                    name,
+                    email,
+                    password,
+                },
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                }
+            );
+
+            console.log(response.data);
+            navigate("/login");
+
+        } catch (error) {
+            console.error("Cannot register:", error);
+        }
+    }
 
     return (
         <div className="h-screen w-screen flex justify-center items-center bg-zinc-200">
@@ -38,7 +67,7 @@ export default function Register() {
                 </div>
 
                 <div className="flex justify-center items-center gap-20 mt-6 w-full">
-                    <button className="auth-button">Create</button>
+                    <button onClick={handleRegister} className="auth-button">Create</button>
                     <a href="/login" className="auth-button">Login</a>
                 </div>
             </div>

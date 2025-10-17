@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import PrivateRoute from './components/authentication/PrivateRoute';
 import Login from './components/authentication/Login';
 import Register from './components/authentication/Register';
@@ -9,36 +9,29 @@ import UserView from './components/UserView';
 function App() {
   const [user, setUser] = useState(null);
 
-  let authUsers = [
-  { name: "Ryan Lemaster",  email: "rlemaster@billingsleyco.com",   password: "password",   role: "admin",    profilePicture: "1" },
-  { name: "Jose Falomir",   email: "jfalomir@billingsleyco.com",    password: "password",   role: "end-user", profilePicture: "1" }]
-
-  const handleLogin = ({ email, password }) => {
-    const user = authUsers.find((user) => user.email === email && user.password === password);
-
-    if (user) {
-      setUser(user);
-      return user;
-    } else {
-      alert("Invalid credentials");
-      return null;
-    }
-
+  const handleLogin = (data) => {
+    console.log(data);
+    setUser(data);
   }
-  
-  const handleLogout = () => { setUser(null); }
+
+  const handleLogout = () => { setUser(null); navigate("/login"); }
 
   return (
     <Router>
       <Routes>
         <Route
           path='/login'
-          element={<Login onLogin={handleLogin} />} />
+          element={
+            user ? (
+              user.role === "admin" ? <Navigate to="/admin" replace /> : <Navigate to="/end-user" replace />
+            ) : (
+              <Login onLogin={handleLogin} />
+            )
+          } />
 
         <Route
           path='/register'
           element={<Register />} />
-
 
         <Route
           path='/admin'
@@ -56,7 +49,15 @@ function App() {
             </PrivateRoute>
           } />
 
-        <Route path='*' element={<Login onLogin={handleLogin} />} />
+        <Route
+          path='*'
+          element={
+            user ? (
+              user.role === "admin" ? <Navigate to="/admin" replace /> : <Navigate to="/end-user" replace />
+            ) : (
+              <Navigate to="/login" replace />
+            )
+          } />
       </Routes>
     </Router>
   )

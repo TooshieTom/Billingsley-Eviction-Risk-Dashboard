@@ -8,6 +8,7 @@ import os
 import csv, io
 from datetime import datetime, date
 from openpyxl import load_workbook
+import bcrypt
 import pandas as pd
 import numpy as np
 import psycopg2
@@ -36,11 +37,11 @@ CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
 
 # --- DB CONNECTION ---
 conn = psycopg2.connect(
-    dbname="billco",
-    user="postgres",
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
     password=os.getenv("DB_PASSWORD"),
-    host="localhost",
-    port=os.getenv("DB_PORT", "5432")
+    host=os.getenv("DB_HOST"),
+    port=os.getenv("DB_PORT")
 )
 conn.autocommit = True
 cursor = conn.cursor()
@@ -50,12 +51,14 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS transacts (
     pscode TEXT,
     tscode TEXT PRIMARY KEY,
+    uscode TEXT,
     screenresult TEXT,
     screenvendor TEXT,
     dnumnsf INTEGER,
     dnumlate INTEGER,
     davgdayslate INTEGER,
     sevicted TEXT,
+    smoveoutreason TEXT,
     drentwrittenoff NUMERIC,
     dnonrentwrittenoff NUMERIC,
     damoutcollections NUMERIC,
@@ -163,6 +166,85 @@ conn.commit()
 
 PRIMARY_KEY = None
 DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein', 'dtmoveout', 'dtroomearlyout']
+
+
+def users():
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(100) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        role VARCHAR(50) DEFAULT 'end-user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );        
+    """)
+
+    conn.commit()
+
+
+users()
+
+@app.route('/register', methods=['POST', 'OPTIONS'])
+def register():
+    if request.method == 'OPTIONS':
+        return jsonify({'message': 'OK'}), 200
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    password = data.get('password')
+
+    if not name or not email or not password:
+        return jsonify({'error': 'Information missing'}), 400
+    
+    hashed_pw = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf8')
+
+    try:
+        cursor.execute("""
+            INSERT INTO users (name, email, password_hash)
+            VALUES (%s, %s, %s)
+            RETURNING id, name, email, role
+        """, (name, email, hashed_pw))
+        conn.commit()
+
+        new_user = cursor.fetchone()
+        return jsonify({
+            'id': new_user[0],
+            'name': new_user[1],
+            'email': new_user[2],
+            'role': new_user[3]
+        }), 201
+
+    except psycopg2.Error as e:
+        conn.rollback()
+        if 'unique' in str(e).lower():
+            return jsonify({'error': 'Email exists'}), 409
+        return jsonify({'error': 'Database error'}), 500
+    
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+
+    if not email or not password:
+        return jsonify({'error': 'Missing either email or password'}), 400
+    
+    cursor.execute("SELECT id, name, email, password_hash, role FROM users WHERE email = %s", (email,))
+    user = cursor.fetchone()
+
+    if not user:
+        return jsonify({'error': 'Invalid credentials'}), 401
+    
+    if bcrypt.checkpw(password.encode('utf-8'), user[3].encode('utf-8')):
+        return jsonify({
+            'id': user[0],
+            'name': user[1],
+            'email': user[2],
+            'role': user[4]
+        }), 200
+    else:
+        return jsonify({'error': 'Invalid credentials'}), 401
 
 
 def _normalize_row(row: dict):

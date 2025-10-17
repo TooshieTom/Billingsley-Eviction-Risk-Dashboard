@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export function Header({ user, onLogout }) {
-    
     const navigate = useNavigate();
     
     const [dropDown, setDropDown] = useState(false);
@@ -22,7 +21,7 @@ export function Header({ user, onLogout }) {
                     alt="Logo"
                 />
                 <div className="bg-white rounded-full">{
-                    user?.profilePicture && (
+                    user?.email && (
                         // <img
                         //     alt="Profile"
                         //     src={user.profilePicture}
@@ -106,7 +105,7 @@ export function UserNavigation({ activeView, setActiveView }) {
 
     return (
         <div className="flex justify-center items-center">
-            <div className="w-11/12 h-32 bg-zinc-200 rounded-2xl shadow-xl">
+            <div className="w-full h-32 rounded-br-2xl rounded-bl-2xl bg-zinc-200">
                 <div className="w-full h-full flex flex-row justify-evenly items-center">
 
                     <button onClick={() => setActiveView("portfolio")} className={`px-4 py-2 w-[100px] ${activeView === "portfolio"

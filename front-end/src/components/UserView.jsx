@@ -7,19 +7,19 @@ import {
 export default function UserView({ user, onSwapView, onLogout }) {
   const [activeView, setActiveView] = useState('portfolio')
   return (
-    <div className="w-screen h-screen bg-zinc-200 flex flex-col scroll-y-overflow">
+    <div className="fixed w-screen h-screen bg-zinc-600 flex flex-col">
       <div className="w-full">
         <Header user={user} onSwapView={onSwapView} onLogout={onLogout} />
       </div>
 
-      <div className="flex-grow flex justify-center items-center">
-        <div className="w-11/12 h-[90%] bg-white rounded-2xl flex flex-col shadow-xl">
+      <div className="flex-grow flex justify-center items-center p-8 min-h-0">
+        <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
           <div className="flex-grow flex justify-center items-stretch overflow-hidden p-6">
             { activeView === "portfolio" && ( <PortfolioView /> )}
             { activeView === "property" && ( <PropertyView /> )}
             { activeView === "at-risk" && ( <AtRiskView /> )}
           </div>
-          <div className="w-full mb-4">
+          <div className="w-full">
             <UserNavigation activeView={activeView} setActiveView={setActiveView} />
           </div>
         </div>
@@ -51,7 +51,7 @@ function useFilters() {
   const [end, setEnd] = useState(() => new Date().toISOString().slice(0,7));
 
   useEffect(() => {
-    fetch("http://localhost:5000/filters/options").then(r => r.json()).then(setOptions).catch(()=>{});
+    fetch("http://127.0.0.1:5000/filters/options").then(r => r.json()).then(setOptions).catch(()=>{});
   }, []);
 
   const qs = useMemo(() => {
@@ -82,9 +82,9 @@ export function PortfolioView() {
   useEffect(() => {
     (async () => {
       const [snap, ts, feat] = await Promise.all([
-        fetch(`http://localhost:5000/kpis/snapshot?${filters.queryString}`).then(r => r.json()),
-        fetch(`http://localhost:5000/kpis/timeseries?${filters.queryString}`).then(r => r.json()),
-        fetch(`http://localhost:5000/features/importance?${filters.queryString}`).then(async r => {
+        fetch(`http://127.0.0.1:5000/kpis/snapshot?${filters.queryString}`).then(r => r.json()),
+        fetch(`http://127.0.0.1:5000/kpis/timeseries?${filters.queryString}`).then(r => r.json()),
+        fetch(`http://127.0.0.1:5000/features/importance?${filters.queryString}`).then(async r => {
           if (r.ok) return r.json();
           return { auc: null, top_features: [] };
         }),
@@ -110,7 +110,7 @@ export function PortfolioView() {
   }
 
   return (
-    <div className="w-full h-full flex flex-col gap-4">
+    <div className="w-full h-full flex flex-col gap-4 py-4 overflow-y-scroll">
       <div className="flex flex-wrap items-center gap-3">
         <Pill label="Start" value={
           <input type="month" className="bg-transparent outline-none" value={filters.start} onChange={e=>filters.setStart(e.target.value)} />
