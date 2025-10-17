@@ -457,8 +457,6 @@ def upload_file():
             r = _normalize_row(r)
             if dataName == "screening":
                 r = map_columns(r)
-            print("Primary Key:", PRIMARY_KEY)
-            print("Row keys:", list(r.keys()))
             if not r.get(PRIMARY_KEY):
                 return
             batch.append([r.get(c) for c in columns])
@@ -470,9 +468,6 @@ def upload_file():
                 cursor.executemany(sql, batch)
                 batch.clear()
         if batch:
-            print("Columns:", columns)
-            print("First batch row:", batch[0] if batch else None)
-            print("SQL:", sql)
             cursor.executemany(sql, batch)
 
     elif ext == ".xlsx":
