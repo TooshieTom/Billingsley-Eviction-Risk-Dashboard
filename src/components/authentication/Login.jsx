@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 
 export default function Login({ onLogin }) {
 
@@ -8,25 +9,26 @@ export default function Login({ onLogin }) {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
 
-    useEffect(() => {
-        console.log(email, " is the email\n" + password, " is the password");
 
-    }, [email, password])
+    const handleLogin = async () => {
+        try {
+            const response = await axios.post("http://127.0.0.1:5000/login", {
+                email,
+                password,
+            });
 
-    const handleLogin = () => {
-        if (!email || !password) {
-            console.log("Missing credentials");
-            return;
+            if(response.status === 200 && response.data.email) {
+                onLogin(response.data);
+            }
+
+        } catch (error) {
+            if(error.response) {
+                console.log("Error occured")
+            }
         }
 
-        const user = onLogin({ email, password });
-        if(user) {
-            if(user.role === "admin") navigate("/admin");
-            else navigate("/end-user");
-        }
+       
     }
-
-    
 
     return (
         <div className="h-screen w-screen flex justify-center items-center bg-zinc-200">

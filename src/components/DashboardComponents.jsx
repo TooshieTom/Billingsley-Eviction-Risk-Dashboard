@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export function Header({ user, onLogout }) {
-    
     const navigate = useNavigate();
     
     const [dropDown, setDropDown] = useState(false);
@@ -22,7 +21,7 @@ export function Header({ user, onLogout }) {
                     alt="Logo"
                 />
                 <div className="bg-white rounded-full">{
-                    user?.profilePicture && (
+                    user?.email && (
                         // <img
                         //     alt="Profile"
                         //     src={user.profilePicture}
