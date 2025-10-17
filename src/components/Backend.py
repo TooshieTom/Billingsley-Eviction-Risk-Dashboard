@@ -80,6 +80,75 @@ CREATE TABLE IF NOT EXISTS transacts (
 );
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS screening (
+    appCredID TEXT,
+    appCredDate DATE,
+    appID TEXT,
+    category TEXT,
+    city TEXT,
+    companyCode TEXT,
+    companyName TEXT,
+    creditRun BOOLEAN,
+    date DATE,
+    propertyID TEXT,
+    policy TEXT,
+    posEmployment TEXT,
+    posHousing TEXT,
+    propName TEXT,
+    reasonOne TEXT,
+    reasonTwo TEXT,
+    reasonThree TEXT,
+    rentOwnHist TEXT,
+    origScore TEXT,
+    finScore TEXT,
+    scoreCat TEXT,
+    scoreModel INTEGER,
+    marketSource TEXT,
+    state TEXT,
+    zip TEXT,
+    age NUMERIC, 
+    currEmpMon NUMERIC,
+    currEmpYear NUMERIC,
+    currResMon NUMERIC,
+    currResYear NUMERIC,
+    income NUMERIC,
+    primIncome NUMERIC,
+    addIncome NUMERIC,
+    riskScore NUMERIC,
+    prevEmpMon NUMERIC,
+    prevEmpYear NUMERIC,
+    prevResMon NUMERIC,
+    prevResYear NUMERIC,
+    rent NUMERIC,
+    rentIncRatio NUMERIC,
+    debtIncRatio NUMERIC,
+    debtCredRatio NUMERIC,
+    voyAppCode TEXT PRIMARY KEY,
+    voyPropName TEXT,
+    voyPropCode TEXT,
+    hasCPMess TEXT,
+    checkMes1 TEXT,
+    checkMes2 TEXT,
+    hasConsStmt TEXT,
+    studDebt TEXT,
+    medDebt TEXT,
+    totScorDebt NUMERIC,
+    totDebt NUMERIC,
+    itemRev1 TEXT,
+    itemRev2 TEXT,
+    itemRev3 TEXT,
+    revRepAck TEXT,
+    appID2 TEXT,
+    appScore TEXT,
+    appMonInc TEXT,
+    appTotDebt NUMERIC,
+    avgRiskScore NUMERIC,
+    twnReport TEXT,
+    appStatus TEXT
+);
+""")
+
 
 # Simple "meta" table to track when data changed so frontend can refresh
 cursor.execute("""
@@ -88,10 +157,11 @@ CREATE TABLE IF NOT EXISTS meta_updates (
     updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 """)
+conn.commit()
 
 # --- Helpers ---
 
-PRIMARY_KEY = "tscode"
+PRIMARY_KEY = None
 DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein', 'dtmoveout', 'dtroomearlyout']
 
 
@@ -113,6 +183,82 @@ def _normalize_row(row: dict):
                 except Exception:
                     row[col] = None
     return row
+
+# --- Mapping of names for screening data ---
+COLUMN_MAPS = {
+    "screening": {
+        "Applicant Credit Applicant ID": "appCredID",
+        "Applicant Credit Date": "appCredDate",
+        "Applicant ID": "appID",
+        "Category": "category",
+        "City": "city",
+        "Company Code": "companyCode",
+        "Company Name": "companyName",
+        "Credit Run": "creditRun",
+        "Date": "date",
+        "Property ID": "propertyID",
+        "Policy": "policy",
+        "Positive Employment": "posEmployment",
+        "Positive Housing": "posHousing",
+        "Property Name": "propName",
+        "Reason 1": "reasonOne",
+        "Reason 2": "reasonTwo",
+        "Reason 3": "reasonThree",
+        "Rent Own History": "rentOwnHist",
+        "Original Score": "origScore",
+        "Final Score": "finScore",
+        "Score Category": "scoreCat",
+        "Score Model": "scoreModel",
+        "Market Source": "marketSource",
+        "State": "state",
+        "Zip": "zip",
+        "Age" : "age",
+        "Current Emp (Months)": "currEmpMon",
+        "Current Emp (Years)": "currEmpYear",
+        "Current Res (Months)": "currResMon",
+        "Current Res (Years)": "currResYear",
+        "Income": "income",
+        "Primary Income": "primIncome",
+        "Additional Income": "addIncome",
+        "Risk Score": "riskScore",
+        "Previous Emp (Months)": "prevEmpMon",
+        "Previous Emp (Years)": "prevEmpYear",
+        "Previous Res (Months)": "prevResMon",
+        "Previous Res (Years)": "prevResYear",
+        "Rent": "rent",
+        "Rent To Income Ratio (%)": "rentIncRatio",
+        "Debt To Income Ratio (%)": "debtIncRatio",
+        "Debt To Credit Ratio (%)": "debtCredRatio",
+        "Voyager Applicant Code": "voyAppCode",
+        "Voyager Property Name": "voyPropName",
+        "Voyager Property Code" : "voyPropCode",
+        "Has CheckPoint Msgs": "hasCPMess",
+        "Checkpoint Message 1": "checkMes1",
+        "Checkpoint Message 2": "checkMes2",
+        "Has Consumer Stmt": "hasConsStmt",
+        "Student Debt": "studDebt",
+        "Medical Debt": "medDebt",
+        "Total Scorable Debt": "totScorDebt",
+        "Total Debt": "totDebt",
+        "Item To Review 1": "itemRev1",
+        "Item To Review 2": "itemRev2",
+        "Item To Review 3": "itemRev3",
+        "Review Report Acknowledgement": "revRepAck",
+        "Application ID": "appID2",
+        "Application Score": "appScore",
+        "Application Monthly Income": "appMonInc",
+        "Application Total Debt (Policy)": "appTotDebt",
+        "Avg Risk Score": "avgRiskScore",
+        "TWN Report Found": "twnReport",
+        "Applicant Status": "appStatus"
+    }
+}
+
+# Lowercase all keys in the mapping for screening
+COLUMN_MAPS["screening"] = {
+    k.lower(): v for k, v in COLUMN_MAPS["screening"].items()
+}
+
 
 
 def _bucketsql():
@@ -170,23 +316,40 @@ def _build_filter_sql(params):
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
-    if "transact" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
+    file = None
+    dataName = None
+    if "transact" in request.files:
+        file = request.files["transact"]
+        dataName = "transacts"
+        PRIMARY_KEY = "tscode"
+    elif "screening" in request.files:
+        file = request.files["screening"]
+        dataName = "screening"
+        PRIMARY_KEY = "voyAppCode"
+        col_map = COLUMN_MAPS.get(dataName, {})
 
-    file = request.files["transact"]
+        def map_columns(row):
+            mapped = {}
+            for key, value in row.items():
+                mapped[col_map.get(key.strip(), key)] = value
+            return mapped
+
+    else:
+        return jsonify({"error": "No file uploaded"}), 400
+    
     filename = file.filename
     content = file.read()  # bytes
 
     ext = os.path.splitext(filename)[1].lower()
     if ext == ".csv":
         try:
-            csv_file = io.StringIO(content.decode("utf-8"))
+            csv_file = io.StringIO(content.decode("utf-8-sig"))
         except UnicodeDecodeError:
             return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
 
         # Skip first 5 rows (headers/noise)
-        for _ in range(5):
-            next(csv_file, None)
+        # for _ in range(5):
+        #     next(csv_file, None)
 
         reader = csv.DictReader(csv_file)
         reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
@@ -197,17 +360,23 @@ def upload_file():
             return jsonify({"message": "No rows detected after header"}), 400
 
         first = _normalize_row(first)
+        if dataName == "screening":
+            first = map_columns(first)   # apply COLUMN_MAPS here
         columns = list(first.keys())
         placeholders = ', '.join(['%s'] * len(columns))
         colsql = ', '.join(columns)
         update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
 
-        sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+        sql = f"INSERT INTO {dataName} ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
 
         batch, batch_size = [], 1000
 
         def add_row(r):
             r = _normalize_row(r)
+            if dataName == "screening":
+                r = map_columns(r)
+            print("Primary Key:", PRIMARY_KEY)
+            print("Row keys:", list(r.keys()))
             if not r.get(PRIMARY_KEY):
                 return
             batch.append([r.get(c) for c in columns])
@@ -219,6 +388,9 @@ def upload_file():
                 cursor.executemany(sql, batch)
                 batch.clear()
         if batch:
+            print("Columns:", columns)
+            print("First batch row:", batch[0] if batch else None)
+            print("SQL:", sql)
             cursor.executemany(sql, batch)
 
     elif ext == ".xlsx":
@@ -233,6 +405,8 @@ def upload_file():
         for row in rows[1:]:
             rd = {k: v for k, v in zip(headers, row)}
             rd = _normalize_row(rd)
+            if dataName == "screening":
+                rd = map_columns(rd)
             if not rd.get(PRIMARY_KEY):
                 continue
             cols = list(rd.keys())
