@@ -7,13 +7,13 @@ import {
 export default function UserView({ user, onSwapView, onLogout }) {
   const [activeView, setActiveView] = useState('portfolio')
   return (
-    <div className="fixed w-screen h-screen bg-zinc-200 flex flex-col scroll-y-overflow">
+    <div className="fixed w-screen h-screen bg-zinc-600 flex flex-col">
       <div className="w-full">
         <Header user={user} onSwapView={onSwapView} onLogout={onLogout} />
       </div>
 
-      <div className="flex-grow flex justify-center items-center">
-        <div className="w-[98%] h-[95%] bg-white rounded-2xl flex flex-col shadow-xl">
+      <div className="flex-grow flex justify-center items-center p-8 min-h-0">
+        <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
           <div className="flex-grow flex justify-center items-stretch overflow-hidden p-6">
             { activeView === "portfolio" && ( <PortfolioView /> )}
             { activeView === "property" && ( <PropertyView /> )}
@@ -110,7 +110,7 @@ export function PortfolioView() {
   }
 
   return (
-    <div className="w-full h-full flex flex-col gap-4 overflow-y-auto">
+    <div className="w-full h-full flex flex-col gap-4 py-4 overflow-y-scroll">
       <div className="flex flex-wrap items-center gap-3">
         <Pill label="Start" value={
           <input type="month" className="bg-transparent outline-none" value={filters.start} onChange={e=>filters.setStart(e.target.value)} />
