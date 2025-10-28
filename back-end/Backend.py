@@ -180,6 +180,34 @@ CREATE TABLE IF NOT EXISTS meta_updates (
 """)
 conn.commit()
 
+# Helpful indexes for WHERE clauses in KPI queries / filters
+def ensure_indexes():
+    # NOTE: CREATE INDEX IF NOT EXISTS is cheap if it already exists.
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_pscode ON transacts (pscode);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_screenresult ON transacts (screenresult);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_sevicted ON transacts (sevicted);"
+    )
+    # dates used to bucket: these help planner even with coalesce/date_trunc
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_dates_movein ON transacts (dtmovein);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_dates_leasefrom ON transacts (dtleasefrom);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_dates_roomout ON transacts (dtroomearlyout);"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transacts_dates_leaseto ON transacts (dtleaseto);"
+    )
+    conn.commit()
+
+ensure_indexes()
 
 # -------------------------------------------------
 # Users / Auth
@@ -197,9 +225,7 @@ def ensure_users_table():
     """)
     conn.commit()
 
-
 ensure_users_table()
-
 
 @app.route('/register', methods=['POST', 'OPTIONS'])
 def register():
@@ -273,7 +299,7 @@ DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein', 'dtmoveout', 'dtroomearl
 
 
 def _normalize_row(row: dict):
-    # (used if you later add upload; safe to keep)
+    # Safe to keep for ingestion
     row = {
         str(k).strip().lower():
             (str(v).strip() if (v is not None and str(v).strip() != '') else None)
@@ -510,6 +536,7 @@ def kpi_timeseries():
 
 # -------------------------------------------------
 # Feature importance with proper missing value handling
+# + in-memory caching so we don't retrain every request
 # -------------------------------------------------
 _PREDICTOR_COLS = [
     "dnumnsf", "dnumlate", "davgdayslate", "srent", "dincome",
@@ -533,7 +560,6 @@ _HUMAN_NAME = {
     "sprevzip": "Previous ZIP code",
 }
 
-
 def _humanize_feature_name(raw: str) -> str:
     if "_" in raw:
         prefix, val = raw.split("_", 1)
@@ -541,18 +567,15 @@ def _humanize_feature_name(raw: str) -> str:
             return f"{_HUMAN_NAME[prefix]}: {val.replace('_', ' ')}"
     return _HUMAN_NAME.get(raw, raw)
 
-
 def _train_rf_with_imputation(X: pd.DataFrame, y: pd.Series):
     """
     Train Random Forest with proper missing value handling via imputation.
     Returns (pipeline, auc_score, feature_names) or (None, None, None) on failure.
     """
     try:
-        # Identify numeric and categorical columns that exist in X
         num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
         cat_cols = [c for c in X.columns if c not in num_cols]
 
-        # Build preprocessing pipeline with imputation
         transformers = []
 
         if num_cols:
@@ -576,18 +599,16 @@ def _train_rf_with_imputation(X: pd.DataFrame, y: pd.Series):
             remainder='drop'
         )
 
-        # Split data
+        # Train/test split
         try:
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.25, random_state=42, stratify=y
             )
         except ValueError:
-            # If stratification fails, try without stratify
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=0.25, random_state=42
             )
 
-        # Use single simplified config for speed
         rf = RandomForestClassifier(
             n_estimators=200,
             max_depth=10,
@@ -605,11 +626,9 @@ def _train_rf_with_imputation(X: pd.DataFrame, y: pd.Series):
 
         pipeline.fit(X_train, y_train)
 
-        # Evaluate
         y_pred_proba = pipeline.predict_proba(X_test)[:, 1]
         auc = roc_auc_score(y_test, y_pred_proba)
 
-        # Extract feature names
         feature_names = []
         if num_cols:
             feature_names.extend(num_cols)
@@ -628,6 +647,87 @@ def _train_rf_with_imputation(X: pd.DataFrame, y: pd.Series):
         print(f"RF training error: {str(e)}")
         return None, None, None
 
+# simple in-memory cache
+_FEATURE_IMPORTANCE_CACHE = {
+    "last_meta_ts": None,
+    "payload": None,
+}
+
+def _latest_meta_ts():
+    """Return latest updated_at from meta_updates, or None if table empty."""
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(updated_at) FROM meta_updates;")
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception:
+        return None
+
+def _compute_feature_importance_payload():
+    """
+    Run the expensive pandas + RF pipeline once and return the JSON payload.
+    """
+    q = """
+        SELECT
+          sevicted,
+          dnumnsf, dnumlate, davgdayslate, srent, dincome,
+          daypaid, dpaysourcechange,
+          screenresult, screenvendor, sflex, sleap, spaymentsource, sprevzip
+        FROM transacts
+        WHERE sevicted IS NOT NULL
+    """
+    df = pd.read_sql(q, conn)
+
+    # sanity checks
+    if df.empty or len(df) < 50:
+        return {
+            "auc": None,
+            "top_features": []
+        }
+
+    evicted_counts = df["sevicted"].astype(str).str.upper().value_counts()
+    if len(evicted_counts) < 2:
+        return {
+            "auc": None,
+            "top_features": []
+        }
+
+    y = (df["sevicted"].astype(str).str.upper() == "YES").astype(int)
+
+    X = df.drop(columns=["sevicted"])
+    X = X[[c for c in _PREDICTOR_COLS if c in X.columns]]
+
+    # remove columns that are entirely missing
+    X = X.dropna(axis=1, how='all')
+    if X.empty or len(X.columns) == 0:
+        return {
+            "auc": None,
+            "top_features": []
+        }
+
+    pipeline, auc, feature_names = _train_rf_with_imputation(X, y)
+    if pipeline is None or feature_names is None:
+        return {
+            "auc": None,
+            "top_features": []
+        }
+
+    feature_importances = pipeline.named_steps['classifier'].feature_importances_
+    feature_importance_pairs = list(zip(feature_names, feature_importances))
+    feature_importance_pairs.sort(key=lambda x: x[1], reverse=True)
+
+    top_features = [
+        {
+            "feature": _humanize_feature_name(name),
+            "importance": float(importance)
+        }
+        for name, importance in feature_importance_pairs[:20]
+    ]
+
+    return {
+        "auc": float(auc),
+        "top_features": top_features
+    }
 
 @app.route("/features/importance", methods=["GET", "OPTIONS"])
 def feature_importance():
@@ -635,84 +735,26 @@ def feature_importance():
         return ("", 204)
 
     try:
-        # Query data
-        q = """
-            SELECT
-              sevicted,
-              dnumnsf, dnumlate, davgdayslate, srent, dincome,
-              daypaid, dpaysourcechange,
-              screenresult, screenvendor, sflex, sleap, spaymentsource, sprevzip
-            FROM transacts
-            WHERE sevicted IS NOT NULL
-        """
-        df = pd.read_sql(q, conn)
+        current_ts = _latest_meta_ts()
 
-        # Quick validation checks
-        if df.empty or len(df) < 50:
-            return jsonify({
-                "auc": None,
-                "top_features": []
-            }), 200
+        # If cache is valid, serve instantly
+        if (
+            _FEATURE_IMPORTANCE_CACHE["payload"] is not None
+            and _FEATURE_IMPORTANCE_CACHE["last_meta_ts"] == current_ts
+        ):
+            return jsonify(_FEATURE_IMPORTANCE_CACHE["payload"]), 200
 
-        # Check if we have both classes
-        evicted_counts = df["sevicted"].astype(str).str.upper().value_counts()
-        if len(evicted_counts) < 2:
-            return jsonify({
-                "auc": None,
-                "top_features": []
-            }), 200
+        # Otherwise compute, store, return
+        payload = _compute_feature_importance_payload()
+        _FEATURE_IMPORTANCE_CACHE["payload"] = payload
+        _FEATURE_IMPORTANCE_CACHE["last_meta_ts"] = current_ts
 
-        # Prepare target variable
-        y = (df["sevicted"].astype(str).str.upper() == "YES").astype(int)
-
-        # Prepare features
-        X = df.drop(columns=["sevicted"])
-        X = X[[c for c in _PREDICTOR_COLS if c in X.columns]]
-
-        # Remove columns with all missing values
-        X = X.dropna(axis=1, how='all')
-
-        if X.empty or len(X.columns) == 0:
-            return jsonify({
-                "auc": None,
-                "top_features": []
-            }), 200
-
-        # Train model with imputation
-        pipeline, auc, feature_names = _train_rf_with_imputation(X, y)
-
-        if pipeline is None or feature_names is None:
-            return jsonify({
-                "auc": None,
-                "top_features": []
-            }), 200
-
-        # Extract feature importances
-        feature_importances = pipeline.named_steps['classifier'].feature_importances_
-
-        # Pair features with importances and sort
-        feature_importance_pairs = list(zip(feature_names, feature_importances))
-        feature_importance_pairs.sort(key=lambda x: x[1], reverse=True)
-
-        # Format top features
-        top_features = [
-            {
-                "feature": _humanize_feature_name(name),
-                "importance": float(importance)
-            }
-            for name, importance in feature_importance_pairs[:20]
-        ]
-
-        return jsonify({
-            "auc": float(auc),
-            "top_features": top_features
-        }), 200
+        return jsonify(payload), 200
 
     except Exception as e:
         print(f"Feature importance error: {str(e)}")
         import traceback
         traceback.print_exc()
-        # Return empty result instead of error to not block page load
         return jsonify({
             "auc": None,
             "top_features": []

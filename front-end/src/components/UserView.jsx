@@ -11,8 +11,6 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-// no html2canvas import; we are not using it
-
 const monthNames = [
   "January","February","March","April","May","June",
   "July","August","September","October","November","December",
@@ -44,9 +42,7 @@ function todayISO() {
 }
 
 /* ============================================================
-   CLONE NODE + INLINE STYLES
-   We deep-clone the node and apply every computed style inline
-   so Tailwind classes and responsive rules are baked in.
+   CLONE NODE + INLINE STYLES (for PNG export)
    ============================================================ */
 function cloneWithComputedStyles(sourceNode) {
   const clone = sourceNode.cloneNode(true);
@@ -57,11 +53,8 @@ function cloneWithComputedStyles(sourceNode) {
     for (let i = 0; i < computed.length; i++) {
       const propName = computed[i];
       const val = computed.getPropertyValue(propName);
-
       if (!val) continue;
-      // avoid dumping raw oklch() just in case
       if (typeof val === "string" && val.includes("oklch")) continue;
-
       dstEl.style.setProperty(propName, val, "important");
     }
 
@@ -74,6 +67,18 @@ function cloneWithComputedStyles(sourceNode) {
 
   applyAllStyles(sourceNode, clone);
   return clone;
+}
+
+/* =========================
+   SMALL HOOK: DEBOUNCE A VALUE
+   ========================= */
+function useDebounced(value, delayMs = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return debounced;
 }
 
 /* =========================
@@ -308,8 +313,11 @@ function useFilters() {
    ========================= */
 export function PortfolioView() {
   const filters = useFilters();
+
   const [snapshot, setSnapshot] = useState(null);
   const [series, setSeries] = useState([]);
+
+  // feature importance now loads separately, once, without blocking filters
   const [topFeatures, setTopFeatures] = useState({
     auc: null,
     top_features: [],
@@ -320,40 +328,64 @@ export function PortfolioView() {
   // THIS IS NOW THE *INNER* CONTENT WRAPPER (not the scroll container)
   const exportRef = useRef(null);
 
+  // Debounce the query string so rapid filter clicks don't spam fetches
+  const debouncedQS = useDebounced(filters.queryString, 300);
+
+  // Fetch KPIs (snapshot + timeseries) whenever debounced filters change
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
-        const [snapRes, tsRes, featRes] = await Promise.all([
-          fetch(
-            `http://127.0.0.1:5000/kpis/snapshot?${filters.queryString}`
-          ),
-          fetch(
-            `http://127.0.0.1:5000/kpis/timeseries?${filters.queryString}`
-          ),
-          fetch(`http://127.0.0.1:5000/features/importance`, {
-            method: "GET",
-            mode: "cors",
-            headers: { "Content-Type": "application/json" },
-          }),
+        const [snapRes, tsRes] = await Promise.all([
+          fetch(`http://127.0.0.1:5000/kpis/snapshot?${debouncedQS}`),
+          fetch(`http://127.0.0.1:5000/kpis/timeseries?${debouncedQS}`),
         ]);
 
         const snapJson = snapRes.ok ? await snapRes.json() : null;
         const tsJson = tsRes.ok ? await tsRes.json() : [];
+
+        if (!alive) return;
+        setSnapshot(snapJson);
+        setSeries(Array.isArray(tsJson) ? tsJson : []);
+      } catch (err) {
+        if (!alive) return;
+        console.error("Dashboard fetch error:", err);
+        setSnapshot(null);
+        setSeries([]);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [debouncedQS]);
+
+  // Fetch feature importance JUST ONCE on mount.
+  // This still calls the backend route, but it's no longer on every filter change.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const featRes = await fetch("http://127.0.0.1:5000/features/importance", {
+          method: "GET",
+          mode: "cors",
+          headers: { "Content-Type": "application/json" },
+        });
         const featJson = featRes.ok
           ? await featRes.json()
           : { auc: null, top_features: [] };
 
-        setSnapshot(snapJson);
-        setSeries(Array.isArray(tsJson) ? tsJson : []);
+        if (!alive) return;
         setTopFeatures(featJson);
       } catch (err) {
-        console.error("Dashboard fetch error:", err);
-        setSnapshot(null);
-        setSeries([]);
+        if (!alive) return;
+        console.error("Feature importance fetch error:", err);
         setTopFeatures({ auc: null, top_features: [] });
       }
     })();
-  }, [filters.queryString]);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // formatting helpers
   const num = (n) => (n ?? 0).toLocaleString();
@@ -390,25 +422,19 @@ export function PortfolioView() {
   };
 
   /* ============================================================
-     EXPORT PNG (SVG <foreignObject> -> Canvas -> PNG)
-     We now snapshot ONLY the inner natural-height content div.
+     EXPORT PNG
      ============================================================ */
   async function doExportPNG() {
     if (!exportRef.current) return;
 
-    // Clone inner content and inline all computed styles
     const clonedNode = cloneWithComputedStyles(exportRef.current);
-
-    // Make sure the cloned root is XHTML so foreignObject can render it
     clonedNode.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
 
-    // Measure natural layout size of the inner content (no scrolling here)
     const width = Math.ceil(exportRef.current.scrollWidth);
     const height = Math.ceil(exportRef.current.scrollHeight);
 
-    const scale = 2; // bump for sharper text
+    const scale = 2;
 
-    // Wrap clone HTML in an SVG with <foreignObject>
     const serializedHTML = new XMLSerializer().serializeToString(clonedNode);
 
     const svgString = `
@@ -422,7 +448,6 @@ export function PortfolioView() {
       </svg>
     `.trim();
 
-    // Make a base64 data URL so the canvas stays origin-clean
     const svgBase64 = window.btoa(unescape(encodeURIComponent(svgString)));
     const imgSrc = `data:image/svg+xml;base64,${svgBase64}`;
 
@@ -436,8 +461,6 @@ export function PortfolioView() {
         canvas.height = height * scale;
 
         const ctx = canvas.getContext("2d");
-
-        // White background so exported PNG isn't transparent / gray
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
