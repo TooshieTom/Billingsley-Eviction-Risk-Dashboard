@@ -67,13 +67,13 @@ export default function FileUpload({ onUpload }) {
                     id="fileInput"
                 />
 
-                <label htmlFor="fileInput" className="cursor-pointer w-full h-full flex flex-row justify-center items-center gap-8 rounded-full">
-                    <p className="text-2xl font-extralight">
+                <label htmlFor="fileInput" className="group cursor-pointer w-full h-full flex flex-row justify-center items-center gap-8 rounded-full">
+                    <p className="text-2xl text-[#0A1A33] font-extralight group-hover:text-white transition-colors duration-500 ease-in-out">
                         {file ? file.name : "Upload"}
                     </p>
 
                     <svg
-                        className="fill-[#0A1A33] group-hover:fill-zinc-200 transition-colors duration-500 ease-in-out"
+                        className="fill-[#0A1A33] group-hover:fill-white transition-colors duration-500 ease-in-out"
                         xmlns="http://www.w3.org/2000/svg"
                         width="32" height="32"
                         viewBox="0 0 256 256">

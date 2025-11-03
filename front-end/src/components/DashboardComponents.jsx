@@ -75,7 +75,7 @@ export function Header({ user, onLogout }) {
 export function AdminNavigation({ activeView, setActiveView }) {
     return (
         <div className="flex justify-center items-center">
-            <div className="w-11/12 h-32 bg-zinc-200 rounded-xl shadow-xl flex justify-evenly items-center">
+            <div className="w-full h-32 bg-zinc-200 rounded-br-2xl rounded-bl-2xl flex justify-evenly items-center">
                 <button
                     onClick={() => setActiveView("tenant-transaction")}
                     className={`px-4 py-2 w-[180px] flex flex-col items-center ${activeView === "tenant-transaction"

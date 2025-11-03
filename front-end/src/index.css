@@ -11,3 +11,12 @@ input {
 .file-upload-anim:hover {
  @apply scale-105 bg-[#0A1A33] text-zinc-200
 }
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -12,8 +12,8 @@ import {
 } from "recharts";
 
 const monthNames = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 function yyyymmToParts(ym) {
@@ -218,14 +218,14 @@ function PropertyMultiSelect({
 export default function UserView({ user, onSwapView, onLogout }) {
   const [activeView, setActiveView] = useState("portfolio");
   return (
-    <div className="fixed w-screen h-screen bg-zinc-600 flex flex-col">
+    <div className="fixed w-screen h-screen bg-zinc-700 flex flex-col">
       <div className="w-full">
         <Header user={user} onSwapView={onSwapView} onLogout={onLogout} />
       </div>
 
       <div className="flex-grow flex justify-center items-center p-8 min-h-0">
         <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
-          <div className="flex-grow flex justify-center items-stretch overflow-hidden p-6">
+          <div className="flex-grow flex justify-center items-stretch overflow-hidden p-4">
             {activeView === "portfolio" && <PortfolioView />}
             {activeView === "property" && <PropertyView />}
             {activeView === "at-risk" && <AtRiskView />}
@@ -262,8 +262,8 @@ function useFilters() {
       .then((data) => {
         const cleaned = Array.isArray(data.pscodes)
           ? data.pscodes.map((p) =>
-              typeof p === "string" ? p.replace(/\.0+$/, "") : p
-            )
+            typeof p === "string" ? p.replace(/\.0+$/, "") : p
+          )
           : [];
         setOptions({
           pscodes: cleaned,
@@ -496,7 +496,7 @@ export function PortfolioView() {
 
   return (
     // OUTER: scroll container for the live UI
-    <div className="w-full h-full flex flex-col py-2 overflow-y-scroll bg-white">
+    <div className="w-full h-full flex flex-col py-2 overflow-auto scrollbar-hide bg-white">
       {/* INNER: full natural-height content.
           We export THIS. It is NOT scroll-clipped. */}
       <div className="flex flex-col gap-4" ref={exportRef}>
@@ -648,6 +648,7 @@ export function PortfolioView() {
                     dataKey="pct_late_payers"
                     name="% late"
                     dot={false}
+                    stroke="#0A1A33"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -671,6 +672,7 @@ export function PortfolioView() {
                     dataKey="nsf_count"
                     name="NSF"
                     dot={false}
+                    stroke="#0A1A33"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -694,13 +696,14 @@ export function PortfolioView() {
                     dataKey="collections_exposure"
                     name="Collections"
                     dot={false}
+                    stroke="#0A1A33"
                   />
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>
 
             {/* $ delinquent over time */}
-            <ChartCard title="$ delinquent over time">
+            <ChartCard title="Delinquent over time ($)">
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={series}>
                   <CartesianGrid strokeDasharray="3 3" />
@@ -717,6 +720,7 @@ export function PortfolioView() {
                     dataKey="dollars_delinquent"
                     name="$ delinquent"
                     dot={false}
+                    stroke="#0A1A33"
                   />
                 </LineChart>
               </ResponsiveContainer>
@@ -732,9 +736,8 @@ export function PortfolioView() {
                 </div>
                 <div className="text-2xl font-semibold">
                   {topFeatures.auc != null
-                    ? `Top drivers (AUC ${
-                        Math.round(topFeatures.auc * 100) / 100
-                      })`
+                    ? `Top drivers (AUC ${Math.round(topFeatures.auc * 100) / 100
+                    })`
                     : "Top drivers"}
                 </div>
               </div>
@@ -755,10 +758,10 @@ export function PortfolioView() {
 
               {(!topFeatures.top_features ||
                 topFeatures.top_features.length === 0) && (
-                <div className="text-zinc-500 text-sm">
-                  Not enough data to compute predictors.
-                </div>
-              )}
+                  <div className="text-zinc-500 text-sm">
+                    Not enough data to compute predictors.
+                  </div>
+                )}
             </div>
           </div>
         </div>
@@ -778,8 +781,128 @@ function ChartCard({ title, children }) {
   );
 }
 
+const properties = [
+  { id: 1, name: 'Thousand Oaks', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/6760-windhaven-pkwy-the-colony-tx-High-Res-1-EDIT-scaled.jpg" },
+  { id: 2, name: 'The Hudson', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3075-painted-lake-circle-the-colony-tx-High-Res-8-scaled.jpg" },
+  { id: 3, name: 'Apartments at The Sound', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3333-bleecker-st-coppell-tx-1-MLS-13.jpg" },
+  { id: 4, name: 'Sage Hill', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/1F2A6039-scaled.jpg" },
+  // { id: 5, name: 'The Flats', image: null },
+  { id: 6, name: 'Wallis & Baker', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/Wallis-and-Baker-Grapevine_sculptures-2.jpg" },
+  { id: 7, name: 'Wylder Square', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2023/05/Wylder-Square-Leasing-Center-scaled.jpg?lossy=1&strip=1&webp=1" },
+  { id: 8, name: 'Hastings End', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/02/HE_-Leasing-Center-2-scaled.jpg?lossy=1&strip=1&webp=1" },
+  { id: 9, name: 'The Beacon', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/02/565-coit-rd-plano-tx-75075-High-Res-12-scaled.jpg?lossy=1&strip=1&webp=1" },
+  { id: 10, name: 'The Chloe', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/11/Chloe_leasing-3-scaled.jpg?lossy=1&strip=1&webp=1" },
+  { id: 11, name: 'August Hills', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2025/04/AH_EXT-1.jpg?lossy=1&strip=1&webp=1" },
+  { id: 12, name: 'Hartwood', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2025/04/2024-05-01_Hartwood-Square_Building-B_Corner-scaled.jpg?lossy=1&strip=1&webp=1" }
+];
+
+function PropertyList({ onPropertySelect }) {
+  return (
+    <div className="w-full h-full flex justify-center items-center rounded-lg overflow-auto scrollbar-hide">
+      <div className="p-2">
+
+        {/* gap-y-8 gap-x-12 */}
+        <div className="grid grid-cols-4 gap-16"> 
+          {properties.map((property) => (
+            <div
+              key={property.id}
+              onClick={() => onPropertySelect(property)}
+              className="w-[420px] bg-white rounded-lg shadow-md overflow-hidden cursor-pointer transform transition-all duration-500 ease-in-out hover:scale-[1.03]"
+            >
+              <div className="h-60 bg-zinc-200 flex items-center justify-center overflow-hidden">
+                {property.image &&
+                  <img
+                    src={property.image}
+                    alt={property.name}
+                    className="w-full h-full object-cover object-center"
+                  />}
+              </div>
+
+              <div className="p-6">
+                <h2 className="text-xl font-light italic text-[#0A1A33]">
+                  {property.name}
+                </h2>
+
+
+                {/* Add Metric (Number 'High/Medium' Risk) ? */}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PropertyDetail({ property, onBack, onOpenFilters }) {
+  return (
+    <div className="relative w-full h-full flex flex-col bg-white rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+        
+        {/* Back Button */}
+        <button
+          onClick={onBack}
+          className="p-2 hover:bg-zinc-200 rounded-lg transition"
+        >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
+            <path d="M232,144a64.07,64.07,0,0,1-64,64H80a8,8,0,0,1,0-16h88a48,48,0,0,0,0-96H51.31l34.35,34.34a8,8,0,0,1-11.32,11.32l-48-48a8,8,0,0,1,0-11.32l48-48A8,8,0,0,1,85.66,45.66L51.31,80H168A64.07,64.07,0,0,1,232,144Z" />
+        </svg>
+        </button>
+
+        {/* Property Name */}
+        <h2 className="text-2xl font-semibold text-[#0A1A33]">
+          {property.name}
+        </h2>
+
+        {/* Global Filter Button */}
+        <button
+          onClick={onOpenFilters}
+          className="p-2 hover:bg-zinc-200 rounded-lg transition"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
+            <path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" />
+          </svg>
+        </button>
+      </div>
+
+  
+      <div className="flex-1 flex gap-4 p-6 overflow-hidden">
+
+        {/* Tenant Side */}
+        <div className="flex-1 bg-gray-50 rounded-lg p-4 flex flex-col">
+          <h3 className="text-base font-semibold text-black mb-3">Tenants</h3>
+          <div className="flex-1 overflow-y-auto scrollbar-hide">
+            <div className="space-y-2">
+              <p className="text-black">Tenant data will be displayed here</p>
+            </div>
+          </div>
+        </div>
+
+        {/* EDA / Graphs / Analysis */}
+        <div className="flex-1 bg-gray-50 rounded-lg p-4 flex flex-col">
+          <h3 className="text-base font-semibold text-black mb-3">Analytics</h3>
+          <div className="flex-1">
+            <p className="text-black">Graphs and charts will be displayed here</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PropertyView() {
-  return <p className="p-6 text-sm text-zinc-700">This is the property view</p>;
+  const [selectedProperty, setSelectedProperty] = useState(null);
+
+  if (selectedProperty) {
+    return (
+      <PropertyDetail
+        property={selectedProperty}
+        onBack={() => setSelectedProperty(null)}
+      />
+    );
+  }
+
+  return <PropertyList onPropertySelect={setSelectedProperty} />;
 }
 
 export function AtRiskView() {

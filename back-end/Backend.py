@@ -7,6 +7,8 @@ from flask_cors import CORS
 import os
 from datetime import datetime, date
 import bcrypt
+import io
+from openpyxl import load_workbook
 import pandas as pd
 import numpy as np
 import psycopg2
@@ -728,6 +730,110 @@ def _compute_feature_importance_payload():
         "auc": float(auc),
         "top_features": top_features
     }
+
+
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    file = None
+    dataName = None
+    if "transact" in request.files:
+        file = request.files["transact"]
+        dataName = "transacts"
+        PRIMARY_KEY = "tscode"
+    elif "screening" in request.files:
+        file = request.files["screening"]
+        dataName = "screening"
+        PRIMARY_KEY = "voyAppCode"
+        col_map = COLUMN_MAPS.get(dataName, {})
+
+        def map_columns(row):
+            mapped = {}
+            for key, value in row.items():
+                mapped[col_map.get(key.strip(), key)] = value
+            return mapped
+
+    else:
+        return jsonify({"error": "No file uploaded"}), 400
+    
+    filename = file.filename
+    content = file.read()  # bytes
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".csv":
+        try:
+            csv_file = io.StringIO(content.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
+
+        # Skip first 5 rows (headers/noise)
+        # for _ in range(5):
+        #     next(csv_file, None)
+
+        reader = csv.DictReader(csv_file)
+        reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
+
+        # Prepare upsert dynamically based on first row
+        first = next(reader, None)
+        if first is None:
+            return jsonify({"message": "No rows detected after header"}), 400
+
+        first = _normalize_row(first)
+        if dataName == "screening":
+            first = map_columns(first)   # apply COLUMN_MAPS here
+        columns = list(first.keys())
+        placeholders = ', '.join(['%s'] * len(columns))
+        colsql = ', '.join(columns)
+        update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
+
+        sql = f"INSERT INTO {dataName} ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+
+        batch, batch_size = [], 1000
+
+        def add_row(r):
+            r = _normalize_row(r)
+            if dataName == "screening":
+                r = map_columns(r)
+            if not r.get(PRIMARY_KEY):
+                return
+            batch.append([r.get(c) for c in columns])
+
+        add_row(first)
+        for r in reader:
+            add_row(r)
+            if len(batch) >= batch_size:
+                cursor.executemany(sql, batch)
+                batch.clear()
+        if batch:
+            cursor.executemany(sql, batch)
+
+    elif ext == ".xlsx":
+        xlsx = io.BytesIO(content)
+        wb = load_workbook(xlsx, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        rows = rows[5:]  # skip first 5 rows
+        if not rows:
+            return jsonify({"message": "No data rows detected"}), 400
+        headers = [str(h).strip().lower() for h in rows[0]]
+        for row in rows[1:]:
+            rd = {k: v for k, v in zip(headers, row)}
+            rd = _normalize_row(rd)
+            if dataName == "screening":
+                rd = map_columns(rd)
+            if not rd.get(PRIMARY_KEY):
+                continue
+            cols = list(rd.keys())
+            placeholders = ', '.join(['%s'] * len(cols))
+            colsql = ', '.join(cols)
+            update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in cols if c != PRIMARY_KEY])
+            sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+            cursor.execute(sql, [rd.get(c) for c in cols])
+    else:
+        return jsonify({"message": "Unsupported file type"}), 400
+
+    # Touch meta_updates
+    cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
+    return jsonify({"message": f"{filename} uploaded successfully"}), 200
 
 @app.route("/features/importance", methods=["GET", "OPTIONS"])
 def feature_importance():

@@ -7,20 +7,20 @@ export default function AdminView({ user, onLogout }) {
     const [activeView, setActiveView] = useState('tenant-transaction')
 
     return (
-        <div className="w-screen h-screen bg-zinc-200 flex flex-col">
+        <div className="w-screen h-screen fixed bg-zinc-700 flex flex-col">
             <div className="w-full">
                 <Header user={user} onLogout={onLogout} />
             </div>
 
-            <div className="flex-grow flex justify-center items-center">
-                <div className="w-11/12 h-[90%] bg-white rounded-2xl flex flex-col">
+            <div className="flex-grow flex justify-center items-center p-8 min-h-0">
+                <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
 
-                    <div className="flex-grow flex justify-center items-center">
+                    <div className="flex-grow flex justify-center items-stretch overflow-hidden p-4">
                         {activeView === "tenant-transaction" && (<TenantTransaction />)}
                         {activeView === "screening-data" && (<ScreeningData />)}
                     </div>
 
-                    <div className="w-full mb-8">
+                    <div className="w-full">
                         <AdminNavigation activeView={activeView} setActiveView={setActiveView} />
                     </div>
                 </div>
@@ -72,7 +72,7 @@ function ScreeningData() {
             const formData = new FormData();
             formData.append("screening", file);
 
-            const response = await fetch("http://localhost:5000/upload", {
+            const response = await fetch("http://127.0.0.1:5000/upload", {
             method: "POST",
             body: formData,
             });
