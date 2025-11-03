@@ -11,6 +11,9 @@ import io
 from openpyxl import load_workbook
 import pandas as pd
 import numpy as np
+import io
+import csv
+from openpyxl import load_workbook
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -297,22 +300,21 @@ def login():
 # -------------------------------------------------
 # Helpers
 # -------------------------------------------------
+PRIMARY_KEY = None
 DATE_COLUMNS = ['dtleasefrom', 'dtleaseto', 'dtmovein', 'dtmoveout', 'dtroomearlyout']
 
 
 def _normalize_row(row: dict):
-    # Safe to keep for ingestion
-    row = {
-        str(k).strip().lower():
-            (str(v).strip() if (v is not None and str(v).strip() != '') else None)
-        for k, v in row.items()
-    }
+    """Trim keys/values, empty->None, and parse dates (mm/dd/yyyy)."""
+    row = {str(k).strip().lower(): (str(v).strip() if (v is not None and str(v).strip() != '') else None)
+           for k, v in row.items()}
     for col in DATE_COLUMNS:
         if row.get(col):
             try:
                 row[col] = datetime.strptime(row[col], "%m/%d/%Y").date()
             except Exception:
                 try:
+                    # Try ISO style if already clean
                     if isinstance(row[col], (datetime, date)):
                         row[col] = row[col]
                     else:
@@ -321,6 +323,191 @@ def _normalize_row(row: dict):
                     row[col] = None
     return row
 
+# --- Mapping of names for screening data ---
+SCREEN_MAPPING = {
+    "screening": {
+        "Applicant Credit Applicant ID": "appCredID",
+        "Applicant Credit Date": "appCredDate",
+        "Applicant ID": "appID",
+        "Category": "category",
+        "City": "city",
+        "Company Code": "companyCode",
+        "Company Name": "companyName",
+        "Credit Run": "creditRun",
+        "Date": "date",
+        "Property ID": "propertyID",
+        "Policy": "policy",
+        "Positive Employment": "posEmployment",
+        "Positive Housing": "posHousing",
+        "Property Name": "propName",
+        "Reason 1": "reasonOne",
+        "Reason 2": "reasonTwo",
+        "Reason 3": "reasonThree",
+        "Rent Own History": "rentOwnHist",
+        "Original Score": "origScore",
+        "Final Score": "finScore",
+        "Score Category": "scoreCat",
+        "Score Model": "scoreModel",
+        "Market Source": "marketSource",
+        "State": "state",
+        "Zip": "zip",
+        "Age" : "age",
+        "Current Emp (Months)": "currEmpMon",
+        "Current Emp (Years)": "currEmpYear",
+        "Current Res (Months)": "currResMon",
+        "Current Res (Years)": "currResYear",
+        "Income": "income",
+        "Primary Income": "primIncome",
+        "Additional Income": "addIncome",
+        "Risk Score": "riskScore",
+        "Previous Emp (Months)": "prevEmpMon",
+        "Previous Emp (Years)": "prevEmpYear",
+        "Previous Res (Months)": "prevResMon",
+        "Previous Res (Years)": "prevResYear",
+        "Rent": "rent",
+        "Rent To Income Ratio (%)": "rentIncRatio",
+        "Debt To Income Ratio (%)": "debtIncRatio",
+        "Debt To Credit Ratio (%)": "debtCredRatio",
+        "Voyager Applicant Code": "voyAppCode",
+        "Voyager Property Name": "voyPropName",
+        "Voyager Property Code" : "voyPropCode",
+        "Has CheckPoint Msgs": "hasCPMess",
+        "Checkpoint Message 1": "checkMes1",
+        "Checkpoint Message 2": "checkMes2",
+        "Has Consumer Stmt": "hasConsStmt",
+        "Student Debt": "studDebt",
+        "Medical Debt": "medDebt",
+        "Total Scorable Debt": "totScorDebt",
+        "Total Debt": "totDebt",
+        "Item To Review 1": "itemRev1",
+        "Item To Review 2": "itemRev2",
+        "Item To Review 3": "itemRev3",
+        "Review Report Acknowledgement": "revRepAck",
+        "Application ID": "appID2",
+        "Application Score": "appScore",
+        "Application Monthly Income": "appMonInc",
+        "Application Total Debt (Policy)": "appTotDebt",
+        "Avg Risk Score": "avgRiskScore",
+        "TWN Report Found": "twnReport",
+        "Applicant Status": "appStatus"
+    }
+}
+
+# Lowercase all keys in the mapping for screening
+SCREEN_MAPPING["screening"] = {
+    k.lower(): v for k, v in SCREEN_MAPPING["screening"].items()
+}
+
+# -------------------------------------------------
+# Upload route for data
+# -------------------------------------------------
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    file = None
+    dataName = None
+    if "transact" in request.files:
+        file = request.files["transact"]
+        dataName = "transacts"
+        PRIMARY_KEY = "tscode"
+    elif "screening" in request.files:
+        file = request.files["screening"]
+        dataName = "screening"
+        PRIMARY_KEY = "voyAppCode"
+        col_map = SCREEN_MAPPING.get(dataName, {})
+
+        def map_columns(row):
+            mapped = {}
+            for key, value in row.items():
+                mapped[col_map.get(key.strip(), key)] = value
+            return mapped
+
+    else:
+        return jsonify({"error": "No file uploaded"}), 400
+    
+    filename = file.filename
+    content = file.read()  # bytes
+
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".csv":
+        try:
+            csv_file = io.StringIO(content.decode("utf-8-sig"))
+        except UnicodeDecodeError:
+            return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
+
+        # Skip first 5 rows (headers/noise)
+        # for _ in range(5):
+        #     next(csv_file, None)
+
+        reader = csv.DictReader(csv_file)
+        reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
+
+        # Prepare upsert dynamically based on first row
+        first = next(reader, None)
+        if first is None:
+            return jsonify({"message": "No rows detected after header"}), 400
+
+        first = _normalize_row(first)
+        if dataName == "screening":
+            first = map_columns(first)   # apply SCREEN_MAPPING here
+        columns = list(first.keys())
+        placeholders = ', '.join(['%s'] * len(columns))
+        colsql = ', '.join(columns)
+        update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
+
+        sql = f"INSERT INTO {dataName} ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+
+        batch, batch_size = [], 1000
+
+        def add_row(r):
+            r = _normalize_row(r)
+            if dataName == "screening":
+                r = map_columns(r)
+            # print("Primary Key:", PRIMARY_KEY)
+            # print("Row keys:", list(r.keys()))
+            if not r.get(PRIMARY_KEY):
+                return
+            batch.append([r.get(c) for c in columns])
+
+        add_row(first)
+        for r in reader:
+            add_row(r)
+            if len(batch) >= batch_size:
+                cursor.executemany(sql, batch)
+                batch.clear()
+        if batch:
+            print("Columns:", columns)
+            print("First batch row:", batch[0] if batch else None)
+            print("SQL:", sql)
+            cursor.executemany(sql, batch)
+
+    elif ext == ".xlsx":
+        xlsx = io.BytesIO(content)
+        wb = load_workbook(xlsx, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        rows = rows[5:]  # skip first 5 rows
+        if not rows:
+            return jsonify({"message": "No data rows detected"}), 400
+        headers = [str(h).strip().lower() for h in rows[0]]
+        for row in rows[1:]:
+            rd = {k: v for k, v in zip(headers, row)}
+            rd = _normalize_row(rd)
+            if dataName == "screening":
+                rd = map_columns(rd)
+            if not rd.get(PRIMARY_KEY):
+                continue
+            cols = list(rd.keys())
+            placeholders = ', '.join(['%s'] * len(cols))
+            colsql = ', '.join(cols)
+            update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in cols if c != PRIMARY_KEY])
+            sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+            cursor.execute(sql, [rd.get(c) for c in cols])
+    else:
+        return jsonify({"message": "Unsupported file type"}), 400
+
+    # Touch meta_updates
+    cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
+    return jsonify({"message": f"{filename} uploaded successfully"}), 200
 
 def _bucketsql():
     # Which month a row counts toward (for grouping)
@@ -732,108 +919,108 @@ def _compute_feature_importance_payload():
     }
 
 
-@app.route("/upload", methods=["POST"])
-def upload_file():
-    file = None
-    dataName = None
-    if "transact" in request.files:
-        file = request.files["transact"]
-        dataName = "transacts"
-        PRIMARY_KEY = "tscode"
-    elif "screening" in request.files:
-        file = request.files["screening"]
-        dataName = "screening"
-        PRIMARY_KEY = "voyAppCode"
-        col_map = COLUMN_MAPS.get(dataName, {})
+# @app.route("/upload", methods=["POST"])
+# def upload_file():
+#     file = None
+#     dataName = None
+#     if "transact" in request.files:
+#         file = request.files["transact"]
+#         dataName = "transacts"
+#         PRIMARY_KEY = "tscode"
+#     elif "screening" in request.files:
+#         file = request.files["screening"]
+#         dataName = "screening"
+#         PRIMARY_KEY = "voyAppCode"
+#         col_map = COLUMN_MAPS.get(dataName, {})
 
-        def map_columns(row):
-            mapped = {}
-            for key, value in row.items():
-                mapped[col_map.get(key.strip(), key)] = value
-            return mapped
+#         def map_columns(row):
+#             mapped = {}
+#             for key, value in row.items():
+#                 mapped[col_map.get(key.strip(), key)] = value
+#             return mapped
 
-    else:
-        return jsonify({"error": "No file uploaded"}), 400
+#     else:
+#         return jsonify({"error": "No file uploaded"}), 400
     
-    filename = file.filename
-    content = file.read()  # bytes
+#     filename = file.filename
+#     content = file.read()  # bytes
 
-    ext = os.path.splitext(filename)[1].lower()
-    if ext == ".csv":
-        try:
-            csv_file = io.StringIO(content.decode("utf-8-sig"))
-        except UnicodeDecodeError:
-            return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
+#     ext = os.path.splitext(filename)[1].lower()
+#     if ext == ".csv":
+#         try:
+#             csv_file = io.StringIO(content.decode("utf-8-sig"))
+#         except UnicodeDecodeError:
+#             return jsonify({"message": f"{filename} is not UTF-8 encoded"}), 400
 
-        # Skip first 5 rows (headers/noise)
-        # for _ in range(5):
-        #     next(csv_file, None)
+#         # Skip first 5 rows (headers/noise)
+#         # for _ in range(5):
+#         #     next(csv_file, None)
 
-        reader = csv.DictReader(csv_file)
-        reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
+#         reader = csv.DictReader(csv_file)
+#         reader.fieldnames = [h.strip().lower() for h in reader.fieldnames]
 
-        # Prepare upsert dynamically based on first row
-        first = next(reader, None)
-        if first is None:
-            return jsonify({"message": "No rows detected after header"}), 400
+#         # Prepare upsert dynamically based on first row
+#         first = next(reader, None)
+#         if first is None:
+#             return jsonify({"message": "No rows detected after header"}), 400
 
-        first = _normalize_row(first)
-        if dataName == "screening":
-            first = map_columns(first)   # apply COLUMN_MAPS here
-        columns = list(first.keys())
-        placeholders = ', '.join(['%s'] * len(columns))
-        colsql = ', '.join(columns)
-        update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
+#         first = _normalize_row(first)
+#         if dataName == "screening":
+#             first = map_columns(first)   # apply COLUMN_MAPS here
+#         columns = list(first.keys())
+#         placeholders = ', '.join(['%s'] * len(columns))
+#         colsql = ', '.join(columns)
+#         update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in columns if c != PRIMARY_KEY])
 
-        sql = f"INSERT INTO {dataName} ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+#         sql = f"INSERT INTO {dataName} ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
 
-        batch, batch_size = [], 1000
+#         batch, batch_size = [], 1000
 
-        def add_row(r):
-            r = _normalize_row(r)
-            if dataName == "screening":
-                r = map_columns(r)
-            if not r.get(PRIMARY_KEY):
-                return
-            batch.append([r.get(c) for c in columns])
+#         def add_row(r):
+#             r = _normalize_row(r)
+#             if dataName == "screening":
+#                 r = map_columns(r)
+#             if not r.get(PRIMARY_KEY):
+#                 return
+#             batch.append([r.get(c) for c in columns])
 
-        add_row(first)
-        for r in reader:
-            add_row(r)
-            if len(batch) >= batch_size:
-                cursor.executemany(sql, batch)
-                batch.clear()
-        if batch:
-            cursor.executemany(sql, batch)
+#         add_row(first)
+#         for r in reader:
+#             add_row(r)
+#             if len(batch) >= batch_size:
+#                 cursor.executemany(sql, batch)
+#                 batch.clear()
+#         if batch:
+#             cursor.executemany(sql, batch)
 
-    elif ext == ".xlsx":
-        xlsx = io.BytesIO(content)
-        wb = load_workbook(xlsx, data_only=True)
-        ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-        rows = rows[5:]  # skip first 5 rows
-        if not rows:
-            return jsonify({"message": "No data rows detected"}), 400
-        headers = [str(h).strip().lower() for h in rows[0]]
-        for row in rows[1:]:
-            rd = {k: v for k, v in zip(headers, row)}
-            rd = _normalize_row(rd)
-            if dataName == "screening":
-                rd = map_columns(rd)
-            if not rd.get(PRIMARY_KEY):
-                continue
-            cols = list(rd.keys())
-            placeholders = ', '.join(['%s'] * len(cols))
-            colsql = ', '.join(cols)
-            update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in cols if c != PRIMARY_KEY])
-            sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
-            cursor.execute(sql, [rd.get(c) for c in cols])
-    else:
-        return jsonify({"message": "Unsupported file type"}), 400
+#     elif ext == ".xlsx":
+#         xlsx = io.BytesIO(content)
+#         wb = load_workbook(xlsx, data_only=True)
+#         ws = wb.active
+#         rows = list(ws.iter_rows(values_only=True))
+#         rows = rows[5:]  # skip first 5 rows
+#         if not rows:
+#             return jsonify({"message": "No data rows detected"}), 400
+#         headers = [str(h).strip().lower() for h in rows[0]]
+#         for row in rows[1:]:
+#             rd = {k: v for k, v in zip(headers, row)}
+#             rd = _normalize_row(rd)
+#             if dataName == "screening":
+#                 rd = map_columns(rd)
+#             if not rd.get(PRIMARY_KEY):
+#                 continue
+#             cols = list(rd.keys())
+#             placeholders = ', '.join(['%s'] * len(cols))
+#             colsql = ', '.join(cols)
+#             update_clause = ', '.join([f"{c}=EXCLUDED.{c}" for c in cols if c != PRIMARY_KEY])
+#             sql = f"INSERT INTO transacts ({colsql}) VALUES ({placeholders}) ON CONFLICT ({PRIMARY_KEY}) DO UPDATE SET {update_clause}"
+#             cursor.execute(sql, [rd.get(c) for c in cols])
+#     else:
+#         return jsonify({"message": "Unsupported file type"}), 400
 
-    # Touch meta_updates
-    cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
-    return jsonify({"message": f"{filename} uploaded successfully"}), 200
+#     # Touch meta_updates
+#     cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
+#     return jsonify({"message": f"{filename} uploaded successfully"}), 200
 
 @app.route("/features/importance", methods=["GET", "OPTIONS"])
 def feature_importance():
