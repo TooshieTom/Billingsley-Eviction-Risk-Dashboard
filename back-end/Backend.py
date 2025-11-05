@@ -1052,6 +1052,46 @@ def feature_importance():
             "auc": None,
             "top_features": []
         }), 200
+    
+
+
+# -------------------------------------------------
+# Fetch Active Tenants
+# -------------------------------------------------
+
+@app.route('/tenants/active', methods=['GET'])
+def get_tenants():
+    query = """
+    SELECT pscode, tscode, dtmovein, dtmoveout
+    FROM transacts
+    WHERE pscode IS NOT NULL 
+    AND tscode IS NOT NULL
+    AND dtmovein IS NOT NULL
+    AND dtmovein <= DATE '2025-04-01'
+    AND (dtmoveout IS NULL OR dtmoveout > DATE '2025-04-01')
+    ORDER BY pscode, tscode
+    """
+
+    try:
+        cursor.execute(query)
+        tenant_list = cursor.fetchall()
+
+
+        tenant_mapping = {}
+        for pscode, tscode, dtmovein, dtmoveout in tenant_list:
+            if pscode not in tenant_mapping:
+                tenant_mapping[pscode] = []
+            
+            tenant_mapping[pscode].append({
+                'tscode': tscode,
+                'dtmovein': dtmovein.isoformat() if dtmovein else None,
+                'dtmoveout': dtmoveout.isoformat() if dtmoveout else None
+            })
+
+        return jsonify(tenant_mapping)
+    
+    except Exception as e:
+        return jsonify({'Error': str(e)}), 500
 
 
 # -------------------------------------------------
