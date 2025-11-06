@@ -110,70 +110,70 @@ CREATE TABLE IF NOT EXISTS transacts (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS screening (
-    appCredID TEXT,
-    appCredDate DATE,
-    appID TEXT,
+    appcredid TEXT,
+    appcreddate DATE,
+    appid TEXT,
     category TEXT,
     city TEXT,
-    companyCode TEXT,
-    companyName TEXT,
-    creditRun BOOLEAN,
+    companycode TEXT,
+    companyname TEXT,
+    creditrun BOOLEAN,
     date DATE,
-    propertyID TEXT,
+    propertyid TEXT,
     policy TEXT,
-    posEmployment TEXT,
-    posHousing TEXT,
-    propName TEXT,
-    reasonOne TEXT,
-    reasonTwo TEXT,
-    reasonThree TEXT,
-    rentOwnHist TEXT,
-    origScore TEXT,
-    finScore TEXT,
-    scoreCat TEXT,
-    scoreModel INTEGER,
-    marketSource TEXT,
+    posemployment TEXT,
+    poshousing TEXT,
+    propname TEXT,
+    reasonone TEXT,
+    reasontwo TEXT,
+    reasonthree TEXT,
+    rentownhist TEXT,
+    origscore TEXT,
+    finscore TEXT,
+    scorecat TEXT,
+    scoremodel INTEGER,
+    marketsource TEXT,
     state TEXT,
     zip TEXT,
     age NUMERIC,
-    currEmpMon NUMERIC,
-    currEmpYear NUMERIC,
-    currResMon NUMERIC,
-    currResYear NUMERIC,
+    currempmon NUMERIC,
+    currempyear NUMERIC,
+    currresmon NUMERIC,
+    currresyear NUMERIC,
     income NUMERIC,
-    primIncome NUMERIC,
-    addIncome NUMERIC,
-    riskScore NUMERIC,
-    prevEmpMon NUMERIC,
-    prevEmpYear NUMERIC,
-    prevResMon NUMERIC,
-    prevResYear NUMERIC,
+    primincome NUMERIC,
+    addincome NUMERIC,
+    riskscore NUMERIC,
+    prevempmon NUMERIC,
+    prevempyear NUMERIC,
+    prevresmon NUMERIC,
+    prevresyear NUMERIC,
     rent NUMERIC,
-    rentIncRatio NUMERIC,
-    debtIncRatio NUMERIC,
-    debtCredRatio NUMERIC,
-    voyAppCode TEXT PRIMARY KEY,
-    voyPropName TEXT,
-    voyPropCode TEXT,
-    hasCPMess TEXT,
-    checkMes1 TEXT,
-    checkMes2 TEXT,
-    hasConsStmt TEXT,
-    studDebt TEXT,
-    medDebt TEXT,
-    totScorDebt NUMERIC,
-    totDebt NUMERIC,
-    itemRev1 TEXT,
-    itemRev2 TEXT,
-    itemRev3 TEXT,
-    revRepAck TEXT,
-    appID2 TEXT,
-    appScore TEXT,
-    appMonInc TEXT,
-    appTotDebt NUMERIC,
-    avgRiskScore NUMERIC,
-    twnReport TEXT,
-    appStatus TEXT
+    rentincratio NUMERIC,
+    debtincratio NUMERIC,
+    debtcredratio NUMERIC,
+    voyappcode TEXT PRIMARY KEY,
+    voypropname TEXT,
+    voypropcode TEXT,
+    hascpmess TEXT,
+    checkmes1 TEXT,
+    checkmes2 TEXT,
+    hasconsstmt TEXT,
+    studdebt TEXT,
+    meddebt TEXT,
+    totscordebt NUMERIC,
+    totdebt NUMERIC,
+    itemrev1 TEXT,
+    itemrev2 TEXT,
+    itemrev3 TEXT,
+    revrepack TEXT,
+    appid2 TEXT,
+    appscore TEXT,
+    appmoninc TEXT,
+    apptotdebt NUMERIC,
+    avgriskscore NUMERIC,
+    twnreport TEXT,
+    appstatus TEXT
 );
 """)
 
@@ -326,70 +326,70 @@ def _normalize_row(row: dict):
 # --- Mapping of names for screening data ---
 SCREEN_MAPPING = {
     "screening": {
-        "Applicant Credit Applicant ID": "appCredID",
-        "Applicant Credit Date": "appCredDate",
-        "Applicant ID": "appID",
+        "Applicant Credit Applicant ID": "appcredid",
+        "Applicant Credit Date": "appcreddate",
+        "Applicant ID": "appid",
         "Category": "category",
         "City": "city",
-        "Company Code": "companyCode",
-        "Company Name": "companyName",
-        "Credit Run": "creditRun",
+        "Company Code": "companycode",
+        "Company Name": "companyname",
+        "Credit Run": "creditrun",
         "Date": "date",
-        "Property ID": "propertyID",
+        "Property ID": "propertyid",
         "Policy": "policy",
-        "Positive Employment": "posEmployment",
-        "Positive Housing": "posHousing",
-        "Property Name": "propName",
-        "Reason 1": "reasonOne",
-        "Reason 2": "reasonTwo",
-        "Reason 3": "reasonThree",
-        "Rent Own History": "rentOwnHist",
-        "Original Score": "origScore",
-        "Final Score": "finScore",
-        "Score Category": "scoreCat",
-        "Score Model": "scoreModel",
-        "Market Source": "marketSource",
+        "Positive Employment": "posemployment",
+        "Positive Housing": "poshousing",
+        "Property Name": "propname",
+        "Reason 1": "reasonone",
+        "Reason 2": "reasontwo",
+        "Reason 3": "reasonthree",
+        "Rent Own History": "rentownhist",
+        "Original Score": "origscore",
+        "Final Score": "finscore",
+        "Score Category": "scorecat",
+        "Score Model": "scoremodel",
+        "Market Source": "marketsource",
         "State": "state",
         "Zip": "zip",
         "Age" : "age",
-        "Current Emp (Months)": "currEmpMon",
-        "Current Emp (Years)": "currEmpYear",
-        "Current Res (Months)": "currResMon",
-        "Current Res (Years)": "currResYear",
+        "Current Emp (Months)": "currempmon",
+        "Current Emp (Years)": "currempyear",
+        "Current Res (Months)": "currresmon",
+        "Current Res (Years)": "currresyear",
         "Income": "income",
-        "Primary Income": "primIncome",
-        "Additional Income": "addIncome",
-        "Risk Score": "riskScore",
-        "Previous Emp (Months)": "prevEmpMon",
-        "Previous Emp (Years)": "prevEmpYear",
-        "Previous Res (Months)": "prevResMon",
-        "Previous Res (Years)": "prevResYear",
+        "Primary Income": "primincome",
+        "Additional Income": "addincome",
+        "Risk Score": "riskscore",
+        "Previous Emp (Months)": "prevempmon",
+        "Previous Emp (Years)": "prevempyear",
+        "Previous Res (Months)": "prevresmon",
+        "Previous Res (Years)": "prevresyear",
         "Rent": "rent",
-        "Rent To Income Ratio (%)": "rentIncRatio",
-        "Debt To Income Ratio (%)": "debtIncRatio",
-        "Debt To Credit Ratio (%)": "debtCredRatio",
-        "Voyager Applicant Code": "voyAppCode",
-        "Voyager Property Name": "voyPropName",
-        "Voyager Property Code" : "voyPropCode",
-        "Has CheckPoint Msgs": "hasCPMess",
-        "Checkpoint Message 1": "checkMes1",
-        "Checkpoint Message 2": "checkMes2",
-        "Has Consumer Stmt": "hasConsStmt",
-        "Student Debt": "studDebt",
-        "Medical Debt": "medDebt",
-        "Total Scorable Debt": "totScorDebt",
-        "Total Debt": "totDebt",
-        "Item To Review 1": "itemRev1",
-        "Item To Review 2": "itemRev2",
-        "Item To Review 3": "itemRev3",
-        "Review Report Acknowledgement": "revRepAck",
-        "Application ID": "appID2",
-        "Application Score": "appScore",
-        "Application Monthly Income": "appMonInc",
-        "Application Total Debt (Policy)": "appTotDebt",
-        "Avg Risk Score": "avgRiskScore",
-        "TWN Report Found": "twnReport",
-        "Applicant Status": "appStatus"
+        "Rent To Income Ratio (%)": "rentincratio",
+        "Debt To Income Ratio (%)": "debtincratio",
+        "Debt To Credit Ratio (%)": "debtcredratio",
+        "Voyager Applicant Code": "voyappcode",
+        "Voyager Property Name": "voypropname",
+        "Voyager Property Code" : "voypropcode",
+        "Has CheckPoint Msgs": "hascpmess",
+        "Checkpoint Message 1": "checkmes1",
+        "Checkpoint Message 2": "checkmes2",
+        "Has Consumer Stmt": "hasconsstmt",
+        "Student Debt": "studdebt",
+        "Medical Debt": "meddebt",
+        "Total Scorable Debt": "totscordebt",
+        "Total Debt": "totdebt",
+        "Item To Review 1": "itemrev1",
+        "Item To Review 2": "itemrev2",
+        "Item To Review 3": "itemrev3",
+        "Review Report Acknowledgement": "revrepack",
+        "Application ID": "appid2",
+        "Application Score": "appscore",
+        "Application Monthly Income": "appmoninc",
+        "Application Total Debt (Policy)": "apptotdebt",
+        "Avg Risk Score": "avgriskscore",
+        "TWN Report Found": "twnreport",
+        "Applicant Status": "appstatus"
     }
 }
 
@@ -412,7 +412,7 @@ def upload_file():
     elif "screening" in request.files:
         file = request.files["screening"]
         dataName = "screening"
-        PRIMARY_KEY = "voyAppCode"
+        PRIMARY_KEY = "voyappcode"
         col_map = SCREEN_MAPPING.get(dataName, {})
 
         def map_columns(row):
@@ -1061,31 +1061,58 @@ def feature_importance():
 
 @app.route('/tenants/active', methods=['GET'])
 def get_tenants():
+    # query = """
+    # SELECT pscode, tscode, dtmovein, dtmoveout
+    # FROM transacts
+    # WHERE pscode IS NOT NULL 
+    # AND tscode IS NOT NULL
+    # AND dtmovein IS NOT NULL
+    # AND dtmovein <= DATE '2025-04-01'
+    # AND (dtmoveout IS NULL OR dtmoveout > DATE '2025-04-01')
+    # ORDER BY pscode, tscode
+    # """
     query = """
-    SELECT pscode, tscode, dtmovein, dtmoveout
-    FROM transacts
-    WHERE pscode IS NOT NULL 
-    AND tscode IS NOT NULL
-    AND dtmovein IS NOT NULL
-    AND dtmovein <= DATE '2025-04-01'
-    AND (dtmoveout IS NULL OR dtmoveout > DATE '2025-04-01')
-    ORDER BY pscode, tscode
+    SELECT 
+    t.pscode,
+    t.tscode,
+    t.dtmovein,
+    t.dtmoveout,
+    s.riskscore,
+    s.totdebt,
+    s.rentincratio,
+    s.debtincratio
+    FROM transacts t
+    LEFT JOIN screening s
+        ON t.tscode = s.voyappcode
+    WHERE t.pscode IS NOT NULL
+    AND t.tscode IS NOT NULL
+    AND t.dtmovein IS NOT NULL
+    AND t.dtmovein <= DATE '2025-04-01'
+    AND (t.dtmoveout IS NULL OR t.dtmoveout > DATE '2025-04-01')
+    ORDER BY t.pscode, t.tscode;
     """
 
     try:
         cursor.execute(query)
         tenant_list = cursor.fetchall()
 
-
         tenant_mapping = {}
-        for pscode, tscode, dtmovein, dtmoveout in tenant_list:
+        for row in tenant_list:
+            # unpack all fields returned by the query
+            pscode, tscode, dtmovein, dtmoveout, riskscore, totdebt, rentincratio, debtincratio = row
+
+
             if pscode not in tenant_mapping:
                 tenant_mapping[pscode] = []
             
             tenant_mapping[pscode].append({
                 'tscode': tscode,
                 'dtmovein': dtmovein.isoformat() if dtmovein else None,
-                'dtmoveout': dtmoveout.isoformat() if dtmoveout else None
+                'dtmoveout': dtmoveout.isoformat() if dtmoveout else None,
+                'riskscore': riskscore,
+                'totdebt': totdebt,
+                'rentincratio': rentincratio,
+                'debtincratio': debtincratio
             })
 
         return jsonify(tenant_mapping)

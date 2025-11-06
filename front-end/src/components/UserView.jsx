@@ -861,9 +861,57 @@ function PropertyList({ onPropertySelect }) {
   );
 }
 
+// Map UI-friendly names to actual tenant object keys
+const fieldMap = {
+  "Risk Score": "riskscore",
+  "Total Debt": "totdebt",
+  "Rent-to-Income": "rentincratio",
+  "Debt-to-Income": "debtincratio",
+};
+
 function PropertyDetail({ property, onBack, tenantData, loading }) {
   const tenants = tenantData[property.propertyCode] || [];
+
   const [selectedTenants, setSelectedTenants] = useState([]);
+  const [showFilters, setShowFilters] = useState(false);
+  const [userInput, setUserInput] = useState("");
+  const [selectedFilter, setSelectedFilter] = useState("None");
+  const [selectedSign, setSelectedSign] = useState("Greater");
+  const [filteredTenants, setFilteredTenants] = useState(tenants);
+ 
+
+  const handleShowFilter = () => {
+    setShowFilters((prev) => !prev); // controls visibility locally
+  };
+
+  // function to filter tenants based on current selections
+  const applyFilter = (field = selectedFilter, sign = selectedSign, value = userInput) => {
+    console.log(selectedFilter,selectedSign,userInput)
+    const fieldKey = fieldMap[selectedFilter]; // get the actual object key
+    const valNum = Number(value);
+    if (field == null || field == "") {
+      setFilteredTenants(null)
+      return
+    }
+    if (!fieldKey) return; // no filter selected
+    const filtered = tenants.filter((t) => {
+      const v = t[fieldKey];
+      if (v == null) return false; // skip nulls
+      switch (sign) {
+        case "Greater":
+          return v > valNum;
+        case "Equal":
+          return v === valNum;
+        case "Less":
+          return v < valNum;
+        default:
+          return true;
+      }
+    });
+    setFilteredTenants(filtered);
+  };
+  // render variable. either shows filtered tenants or all tenants if no filter
+  const tenantsToRender = filteredTenants || tenants;
 
   useEffect(() => {
     console.log(selectedTenants);
@@ -876,6 +924,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
         : [...prev, tenantCode]
     );
   };
+
 
   return (
     <div className="relative w-full h-full flex flex-col bg-white rounded-lg overflow-hidden">
@@ -897,11 +946,73 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
         </h2>
 
         {/* Global Filter Button */}
-        <button className="p-2 hover:bg-zinc-200 rounded-lg transition">
+        <button 
+          onClick={handleShowFilter} 
+          className="p-2 hover:bg-zinc-200 rounded-lg transition"
+        >
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
             <path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" />
           </svg>
         </button>
+        {showFilters && (
+        <div className="absolute top-12 left-340 w-96 p-4 bg-white rounded-2xl shadow-xl border border-zinc-200 z-50">
+          <h3 className="text-sm font-semibold mb-3">Screening Filters</h3>
+          <div className="space-y-3">
+            {/* Dropdown filter for Critera */}
+            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
+              <label className="block text-xs font-medium mb-1">
+                Screening Criteria
+              </label>
+              <select
+                value={selectedFilter}
+                onChange={(e) => setSelectedFilter(e.target.value)}
+                className="w-full h-10 border rounded px-2 py-1 text-sm"
+              >
+                <option value="">None</option>
+                <option value="Risk Score">Risk Score</option>
+                <option value="Total Debt">Total Debt</option>
+                <option value="Rent-to-Income">Rent-to-Income</option>
+                <option value="Debt-to-Income">Debt-to-Income</option>
+              </select>
+            </div>
+            
+            {/* Dropdown filter for Sign */}
+            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
+              <label className="block text-xs font-medium mb-1">
+                Filter Type
+              </label>
+              <select
+                value={selectedSign}
+                onChange={(e) => setSelectedSign(e.target.value)}
+                className="w-full h-10 text-sm border rounded px-2 text-sm"
+              >
+                <option value="Greater">{">"}</option>
+                <option value="Equal">{"="}</option>
+                <option value="Less">{"<"}</option>
+              </select>
+            </div>
+
+            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
+              <label className="block text-xs font-medium mb-1">Filter Value</label>
+              <input
+                type="text"
+                value={userInput}
+                onChange={(e) => setUserInput(e.target.value)}
+                placeholder="Enter filter value"
+                className="w-full h-10 px-2 text-sm border rounded shadow-sm"
+              />
+            </div>
+            <div className="p-3 flex justify-center rounded-lg border border-zinc-200 box-border shadow-sm">
+              <button 
+                onClick={() => applyFilter()}
+                className="p-2 px-6 bg-[#0A1A33] text-zinc-100 text-lg rounded-full shadow-lg hover:bg-[#13294B] transition-colors" 
+              >
+              Filter Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
 
       <div className="flex-1 flex gap-4 p-6 overflow-hidden">
@@ -911,7 +1022,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-base font-semibold text-black">Tenants</h3>
             <span className="text-sm text-gray-600 bg-white px-3 py-1 rounded-full">
-              {loading ? '...' : `${tenants.length} active`}
+              {loading ? '...' : `${tenantsToRender.length} active`}
             </span>
           </div>
 
@@ -946,7 +1057,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {tenants.map((tenant, index) => {
+                    {tenantsToRender.map((tenant, index) => {
                       const tenantCode = tenant.tscode || tenant;
                       const isSelected = selectedTenants.includes(tenantCode);
 
@@ -969,7 +1080,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
                             {tenant.dtmoveout ? new Date(tenant.dtmoveout).toLocaleDateString() : '-'}
                           </td>
                           <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            -
+                            {tenant.riskscore}
                           </td>
                           <td className="px-3 py-5 text-center">
                             <div className="flex items-center justify-center h-full">
