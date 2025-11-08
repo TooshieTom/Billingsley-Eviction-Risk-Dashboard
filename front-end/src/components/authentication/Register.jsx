@@ -46,7 +46,7 @@ export default function Register() {
                         onChange={(e) => setName(e.target.value)}
                         type="text"
                         placeholder="Full Name"
-                        className="border p-2 rounded w-full"
+                        className="border p-2 rounded w-full auth-input"
                     />
 
                     <input
@@ -54,7 +54,7 @@ export default function Register() {
                         onChange={(e) => setEmail(e.target.value)}
                         type="email"
                         placeholder="Email"
-                        className="border p-2 rounded w-full"
+                        className="border p-2 rounded w-full auth-input"
                     />
 
                     <input
@@ -62,7 +62,7 @@ export default function Register() {
                         onChange={(e) => setPassword(e.target.value)}
                         type="password"
                         placeholder="Password"
-                        className="border p-2 rounded w-full"
+                        className="border p-2 rounded w-full auth-input"
                     />
                 </div>
 

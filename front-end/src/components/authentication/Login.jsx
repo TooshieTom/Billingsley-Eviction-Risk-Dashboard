@@ -40,14 +40,14 @@ export default function Login({ onLogin }) {
                         onChange={(e) => setEmail(e.target.value)}
                         type="email"
                         placeholder="Email"
-                        className="border p-2 rounded w-full" />
+                        className="border p-2 rounded w-full auth-input" />
 
                     <input
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         type="password"
                         placeholder="Password"
-                        className="border p-2 rounded w-full" />
+                        className="border p-2 rounded w-full auth-input" />
                 </div>
 
                 <div className="flex justify-center items-center gap-20 mt-6 w-full">
