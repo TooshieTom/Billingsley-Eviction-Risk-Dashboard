@@ -1206,7 +1206,7 @@ function PropertyDetail({ property,
 
                 <div className="flex-1">
 
-                  <div className="h-full w-full flex flex-col justify-evenly">
+                  <div className="h-full w-full flex flex-col gap-y-2">
 
                     {/* Search Functionality */}
                     <h5 className="text-lg font-semibold mb-3 mt-3 text-black">Search</h5>
@@ -1243,7 +1243,7 @@ function PropertyDetail({ property,
                     </div>
 
                     {/* Screening Criteria */}
-                    <h5 className="text-lg font-semibold mt-3 mb-3 text-black">Screening Filters</h5>
+                    <h5 className="text-lg font-semibold mt-3 mb-3 text-black">Filters</h5>
 
                     <div className="w-full h-24">
                       <label className="block text-md font-medium mb-3 text-[#0A1A33]">
