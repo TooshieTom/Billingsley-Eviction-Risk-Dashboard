@@ -1,9 +1,5 @@
 @import "tailwindcss";
 
-input {
-    @apply w-7/12 p-4 mb-8 border border-zinc-300 rounded-2xl text-xl
-}
-
 .auth-button {
     @apply h-[47px] w-[120px] bg-zinc-200 rounded-2xl flex justify-center items-center
 }
@@ -19,4 +15,8 @@ input {
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
+}
+
+.filter-button:hover {
+  @apply transition-colors duration-500 ease-in-out bg-[#0A1A33] text-white 
 }

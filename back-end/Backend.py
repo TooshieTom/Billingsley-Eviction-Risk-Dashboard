@@ -1075,6 +1075,7 @@ def get_tenants():
     SELECT 
     t.pscode,
     t.tscode,
+    t.uscode,
     t.dtmovein,
     t.dtmoveout,
     s.riskscore,
@@ -1089,7 +1090,7 @@ def get_tenants():
     AND t.dtmovein IS NOT NULL
     AND t.dtmovein <= DATE '2025-04-01'
     AND (t.dtmoveout IS NULL OR t.dtmoveout > DATE '2025-04-01')
-    ORDER BY t.pscode, t.tscode;
+    ORDER BY s.riskscore ASC;
     """
 
     try:
@@ -1099,7 +1100,7 @@ def get_tenants():
         tenant_mapping = {}
         for row in tenant_list:
             # unpack all fields returned by the query
-            pscode, tscode, dtmovein, dtmoveout, riskscore, totdebt, rentincratio, debtincratio = row
+            pscode, tscode, uscode, dtmovein, dtmoveout, riskscore, totdebt, rentincratio, debtincratio = row
 
 
             if pscode not in tenant_mapping:
@@ -1107,6 +1108,7 @@ def get_tenants():
             
             tenant_mapping[pscode].append({
                 'tscode': tscode,
+                'uscode': uscode,
                 'dtmovein': dtmovein.isoformat() if dtmovein else None,
                 'dtmoveout': dtmoveout.isoformat() if dtmoveout else None,
                 'riskscore': riskscore,

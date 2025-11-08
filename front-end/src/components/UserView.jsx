@@ -216,6 +216,7 @@ function PropertyMultiSelect({
    MAIN SHELL (header/nav chrome)
    ========================= */
 export default function UserView({ user, onSwapView, onLogout }) {
+  const [selectedTenants, setSelectedTenants] = useState([]);
   const [activeView, setActiveView] = useState("portfolio");
   return (
     <div className="fixed w-screen h-screen bg-zinc-700 flex flex-col">
@@ -227,8 +228,8 @@ export default function UserView({ user, onSwapView, onLogout }) {
         <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
           <div className="flex-grow flex justify-center items-stretch overflow-hidden p-4">
             {activeView === "portfolio" && <PortfolioView />}
-            {activeView === "property" && <PropertyView />}
-            {activeView === "at-risk" && <AtRiskView />}
+            {activeView === "property" && <PropertyView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
+            {activeView === "at-risk" && <AtRiskView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
           </div>
           <div className="w-full">
             <UserNavigation
@@ -781,80 +782,162 @@ function ChartCard({ title, children }) {
   );
 }
 
-// { propertyId: '', propertyName: 'The Charles', propertyCode: '', image: null }, // Missing 'The Charles' information
-const PROPERTY_LIST = [
-  { propertyId: 'DD494', propertyName: 'Austin Boulevard', propertyCode: '1005', image: null },
-  { propertyId: 'DD483', propertyName: 'Austin Gardens', propertyCode: '1003', image: null },
-  { propertyId: 'DD486', propertyName: 'Austin Parks', propertyCode: '1004', image: null },
-  { propertyId: 'DD492', propertyName: 'Austin Square', propertyCode: '1004c', image: null },
-  { propertyId: 'DD537', propertyName: 'Bleecker Street', propertyCode: '1404', image: null },
-  { propertyId: 'DD541', propertyName: 'Byron Bay', propertyCode: '1406', image: null },
-  { propertyId: 'DD539', propertyName: 'Harpers', propertyCode: '1405', image: null },
-  { propertyId: 'BR704', propertyName: 'Hastings End', propertyCode: '1407', image: null },
-  { propertyId: 'DD524', propertyName: 'The Hudson (A)', propertyCode: '1102', image: null },
-  { propertyId: 'DD530', propertyName: 'The Hudson (B)', propertyCode: '1103', image: null },
-  { propertyId: 'DD544', propertyName: 'Olympus TH', propertyCode: '1408', image: null },
-  { propertyId: 'DD546', propertyName: 'Rombauer TH', propertyCode: '1409', image: null },
-  { propertyId: 'DD473', propertyName: 'Sage Hill', propertyCode: '1410', image: null },
-  { propertyId: 'CD392', propertyName: 'Sloane Street', propertyCode: '1301', image: null },
-  { propertyId: 'CD393', propertyName: 'Sloane Street (East)', propertyCode: '1302', image: null },
-  { propertyId: 'DD500', propertyName: 'Stags Leap', propertyCode: '1007', image: null },
-  { propertyId: 'CS574', propertyName: 'The Beacon (North)', propertyCode: '1501', image: null },
-  { propertyId: 'CS575', propertyName: 'The Beacon (South)', propertyCode: '1502', image: null },
-  { propertyId: 'DD515', propertyName: 'The Boat House', propertyCode: '1101', image: null },
-  { propertyId: 'EH954', propertyName: 'The Chloe', propertyCode: '1104', image: null },
-  { propertyId: 'DD478', propertyName: 'The Flats', propertyCode: '1411', image: null },
-  { propertyId: 'DD533', propertyName: 'The Wharf', propertyCode: '1403', image: null },
-  { propertyId: 'DD522', propertyName: 'Wallis & Baker', propertyCode: '1601', image: null },
-  { propertyId: 'BK659', propertyName: 'Wylder Square', propertyCode: '1303', image: null },
-];
+const PROPERTY_GROUPINGS = [
+  {
+    name: "Apartments at The Sound",
+    image: "https://www.apartmentsatthesound.com/wp-content/uploads/2025/05/HA_Twilight_Harpers-Court-at-Harpers-at-The-Sound_July2020-1-1024x768.jpg",
+    properties: [
+      { propertyId: 'DD537', propertyName: 'Bleecker Street', propertyCode: '1404' },
+      { propertyId: 'DD541', propertyName: 'Byron Bay', propertyCode: '1406' },
+      { propertyId: 'DD539', propertyName: 'Harpers', propertyCode: '1405' },
+      { propertyId: 'BR704', propertyName: "Hasting's End", propertyCode: '1407' },
+      { propertyId: 'DD544', propertyName: 'Olympus', propertyCode: '1408' },
+      { propertyId: 'DD546', propertyName: 'Rombauer', propertyCode: '1409' },
+      { propertyId: 'DD533', propertyName: 'The Wharf', propertyCode: '1403' },
+      { propertyId: 'DD478', propertyName: 'The Flats', propertyCode: '1411' },
+    ]
+  },
 
-// const properties = [
-//   { id: 1, name: 'Thousand Oaks', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/6760-windhaven-pkwy-the-colony-tx-High-Res-1-EDIT-scaled.jpg" },
-//   { id: 2, name: 'The Hudson', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3075-painted-lake-circle-the-colony-tx-High-Res-8-scaled.jpg" },
-//   { id: 3, name: 'Apartments at The Sound', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3333-bleecker-st-coppell-tx-1-MLS-13.jpg" },
-//   { id: 4, name: 'Sage Hill', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/1F2A6039-scaled.jpg" },
-//   // { id: 5, name: 'The Flats', image: null },
-//   { id: 6, name: 'Wallis & Baker', image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/Wallis-and-Baker-Grapevine_sculptures-2.jpg" },
-//   { id: 7, name: 'Wylder Square', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2023/05/Wylder-Square-Leasing-Center-scaled.jpg?lossy=1&strip=1&webp=1" },
-//   { id: 8, name: 'Hastings End', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/02/HE_-Leasing-Center-2-scaled.jpg?lossy=1&strip=1&webp=1" },
-//   { id: 9, name: 'The Beacon', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/02/565-coit-rd-plano-tx-75075-High-Res-12-scaled.jpg?lossy=1&strip=1&webp=1" },
-//   { id: 10, name: 'The Chloe', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2024/11/Chloe_leasing-3-scaled.jpg?lossy=1&strip=1&webp=1" },
-//   { id: 11, name: 'August Hills', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2025/04/AH_EXT-1.jpg?lossy=1&strip=1&webp=1" },
-//   { id: 12, name: 'Hartwood', image: "https://b2679851.smushcdn.com/2679851/wp-content/uploads/2025/04/2024-05-01_Hartwood-Square_Building-B_Corner-scaled.jpg?lossy=1&strip=1&webp=1" }
-// ];
+  {
+    name: "Beacon Square",
+    image: "https://www.thebeaconapartments.com/wp-content/uploads/2025/04/BE_Pool-11-1024x683.jpg",
+    properties: [
+      { propertyId: 'CS574', propertyName: 'The Beacon (North)', propertyCode: '1501' },
+      { propertyId: 'CS575', propertyName: 'The Beacon (South)', propertyCode: '1502' },
+    ]
+  },
+
+  {
+    name: "Grapevine Mills Crossing",
+    image: "https://www.wallisandbaker.com/wp-content/uploads/2025/03/Wallis-Baker-Pool-Shot-July-2021-1024x683.png",
+    properties: [
+      { propertyId: 'DD522', propertyName: 'Wallis & Baker', propertyCode: '1601' },
+    ]
+  },
+
+  {
+    name: "Sage Hill",
+    image: "https://www.sagehillapts.com/wp-content/uploads/2025/01/SH_Pool-at-The-Stone-House-2-1024x683.jpg",
+    properties: [
+      { propertyId: 'DD473', propertyName: 'Sage Hill', propertyCode: '1410' },
+    ]
+  },
+
+  {
+    name: "Sloan Corners",
+    image: "https://media.billingsleyco.com/m/41db5d39117b7da4/original/Sloan_Corners_Fairview_Allen_Retail.jpg",
+    properties: [
+      { propertyId: 'CD392', propertyName: 'Sloane Street', propertyCode: '1301' },
+      { propertyId: 'CD393', propertyName: 'Sloane Street (East)', propertyCode: '1302' },
+      { properyId: null, propertyName: 'Hartwood', propertyCode: null }
+    ]
+  },
+
+  {
+    name: "The Boat House",
+    image: "https://irp.cdn-website.com/d78e83d1/dms3rep/multi/2875-painted-lake-circle-the-colony-tx-High-Res-57.jpg",
+    properties: [
+      { propertyId: 'DD515', propertyName: 'The Boat House', propertyCode: '1101' },
+    ]
+  },
+
+  {
+    name: "The Chloe",
+    image: "https://thechloeapartments.com/wp-content/uploads/2025/04/The-Chloe-The-Colony-TX-Indochine-Clubroom-18-scaled.jpg",
+    properties: [
+      { propertyId: 'EH954', propertyName: 'The Chloe', propertyCode: '1104' },
+    ]
+  },
+
+  {
+    name: "The Hudson",
+    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3075-painted-lake-circle-the-colony-tx-High-Res-8-scaled.jpg",
+    properties: [
+      { propertyId: 'DD524', propertyName: 'The Hudson (A)', propertyCode: '1102' },
+      { propertyId: 'DD530', propertyName: 'The Hudson (B)', propertyCode: '1103' },
+    ]
+  },
+
+  {
+    name: "The Landing",
+    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/4216-sloane-street-carrollton-tx-High-Res-9-scaled.jpg",
+    properties: [
+      { propertyId: 'BK659', propertyName: 'Wylder Square', propertyCode: '1303' },
+    ]
+  },
+
+  {
+    name: "Thousand Oaks",
+    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/6760-windhaven-pkwy-the-colony-tx-High-Res-13-scaled.jpg",
+    properties: [
+      { propertyId: 'DD494', propertyName: 'Austin Boulevard', propertyCode: '1005' },
+      { propertyId: 'DD483', propertyName: 'Austin Gardens', propertyCode: '1003' },
+      { propertyId: 'DD486', propertyName: 'Austin Parks', propertyCode: '1004' },
+      { propertyId: 'DD492', propertyName: 'Austin Square', propertyCode: '1004c' },
+      { propertyId: 'DD500', propertyName: "Stag's Leap", propertyCode: '1007' },
+      { propertyId: 'DD506', propertyName: 'The Charles', propertyCode: '1008' },
+    ]
+  },
+]
 
 function PropertyList({ onPropertySelect }) {
+  const [hoveredPropertyGrouping, setHoveredPropertyGrouping] = useState(null);
+
   return (
     <div className="w-full h-full flex justify-center items-start rounded-lg overflow-auto scrollbar-hide">
       <div className="p-8">
-
-        {/* gap-y-8 gap-x-12 */}
         <div className="grid grid-cols-4 gap-16">
-          {PROPERTY_LIST.map((property) => (
-            <div
-              key={property.propertyId}
-              onClick={() => onPropertySelect(property)}
-              className="w-[420px] bg-white rounded-lg shadow-md overflow-hidden cursor-pointer transform transition-all duration-500 ease-in-out hover:scale-[1.03]"
-            >
-              <div className="h-60 bg-zinc-200 flex items-center justify-center overflow-hidden">
-                {property.image &&
-                  <img
-                    src={property.image}
-                    alt={property.propertyName}
-                    className="w-full h-full object-cover object-center"
-                  />}
+          {PROPERTY_GROUPINGS.map((propertyGroup, idx) => {
+            const propertyLength = propertyGroup.properties.length > 1;
+
+            return (
+              <div
+                key={idx}
+                onMouseEnter={() => propertyLength && setHoveredPropertyGrouping(idx)}
+                onMouseLeave={() => setHoveredPropertyGrouping(null)}
+                onClick={() => !propertyLength && onPropertySelect(propertyGroup.properties[0])}
+                className="w-[420px] bg-white rounded-lg shadow-md cursor-pointer relative"
+              >
+                <div className="h-60 bg-zinc-200 flex items-center justify-center overflow-hidden rounded-tl-lg rounded-tr-lg">
+                  {propertyGroup.image ? (
+                    <img
+                      src={propertyGroup.image}
+                      alt={propertyGroup.name}
+                      className="w-full h-full object-cover object-center transform-gpu transition-all duration-500 ease-in-out hover:scale-105 overflow-hidden"
+                    />
+                  ) : (
+                    <span className="text-gray-400">Image</span>
+                  )}
+                </div>
+
+                <div className="p-6">
+                  <h2 className="text-xl font-light italic text-[#0A1A33]">
+                    {propertyGroup.name}
+                  </h2>
+                </div>
+
+                {/* Sub-property selection. Only have groups when propertyLength > 1 */}
+                {propertyLength && hoveredPropertyGrouping === idx && (
+                  <div style={{ top: '-1px', left: '-1px', right: '-1px', bottom: '-1px' }} className="absolute rounded-lg bg-zinc-200 flex items-start justify-start p-6">
+                    <div className="w-full grid grid-cols-2 gap-3">
+                      {propertyGroup.properties.map((property) => (
+                        <button
+                          key={property.propertyId}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onPropertySelect(property);
+                          }}
+                          className="px-5 py-4 bg-white rounded-lg text-lg font-medium text-[#0A1A33] hover:bg-[#0A1A33] hover:text-white hover:border-[#0A1A33] transition-all duration-200 shadow-md"
+                        >
+                          {property.propertyName}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-
-              <div className="p-6">
-                <h2 className="text-xl font-light italic text-[#0A1A33]">
-                  {property.propertyName}
-                </h2>
-
-
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
@@ -869,16 +952,29 @@ const fieldMap = {
   "Debt-to-Income": "debtincratio",
 };
 
-function PropertyDetail({ property, onBack, tenantData, loading }) {
+function PropertyDetail({ property, 
+                          onBack, 
+                          tenantData, 
+                          loading,
+                          selectedTenants,
+                          setSelectedTenants
+}) {
   const tenants = tenantData[property.propertyCode] || [];
 
-  const [selectedTenants, setSelectedTenants] = useState([]);
   const [showFilters, setShowFilters] = useState(false);
   const [userInput, setUserInput] = useState("");
-  const [selectedFilter, setSelectedFilter] = useState("None");
+
+  const [selectedFilter, setSelectedFilter] = useState("Risk Score");
   const [selectedSign, setSelectedSign] = useState("Greater");
+
+  const [tenantSearch, setTenantSearch] = useState("");
+  const [unitSearch, setUnitSearch] = useState("")
+
   const [filteredTenants, setFilteredTenants] = useState(tenants);
- 
+
+  useEffect(() => {
+    console.log(selectedTenants);
+  }, [selectedTenants])
 
   const handleShowFilter = () => {
     setShowFilters((prev) => !prev); // controls visibility locally
@@ -886,36 +982,63 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
 
   // function to filter tenants based on current selections
   const applyFilter = (field = selectedFilter, sign = selectedSign, value = userInput) => {
-    console.log(selectedFilter,selectedSign,userInput)
+
+    console.log(selectedFilter, selectedSign, userInput)
+    let filtered = [...tenants];
+
     const fieldKey = fieldMap[selectedFilter]; // get the actual object key
     const valNum = Number(value);
-    if (field == null || field == "") {
-      setFilteredTenants(null)
-      return
+    if (fieldKey && value && value.trim() !== "") {
+      filtered = tenants.filter((t) => {
+        const v = t[fieldKey];
+        if (v == null) return false; // skip nulls
+        switch (sign) {
+          case "Greater":
+            return v > valNum;
+          case "Equal":
+            return v === valNum;
+          case "Less":
+            return v < valNum;
+          default:
+            return true;
+        }
+      });
     }
-    if (!fieldKey) return; // no filter selected
-    const filtered = tenants.filter((t) => {
-      const v = t[fieldKey];
-      if (v == null) return false; // skip nulls
-      switch (sign) {
-        case "Greater":
-          return v > valNum;
-        case "Equal":
-          return v === valNum;
-        case "Less":
-          return v < valNum;
-        default:
-          return true;
-      }
-    });
-    setFilteredTenants(filtered);
+
+    if (tenantSearch.trim()) {
+      filtered = filtered.filter((t) => {
+        const code = (t.tscode || '').toString().toLowerCase();
+        return code.includes(tenantSearch.toLowerCase());
+      })
+    }
+
+    if (unitSearch.trim()) {
+      filtered = filtered.filter((t) => {
+        const code = (t.uscode || '').toString().toLowerCase();
+        return code.includes(unitSearch.toLowerCase());
+      })
+    }
+
+    if (!fieldKey && !tenantSearch.trim() && !unitSearch.trim()) {
+      setFilteredTenants(null);
+      return;
+    }
+
+    setFilteredTenants(filtered)
   };
+
+  const clearFilters = () => {
+    setSelectedFilter("Risk Score");
+    setSelectedSign("Greater");
+    setUserInput("");
+    setTenantSearch("");
+    setUnitSearch("");
+    setFilteredTenants(null);
+  }
+
+
   // render variable. either shows filtered tenants or all tenants if no filter
   const tenantsToRender = filteredTenants || tenants;
-
-  useEffect(() => {
-    console.log(selectedTenants);
-  }, [selectedTenants])
 
   const handleSelectTenant = (tenantCode) => {
     setSelectedTenants((prev) =>
@@ -928,7 +1051,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
 
   return (
     <div className="relative w-full h-full flex flex-col bg-white rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-6 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+      <div className="flex items-center justify-between px-6 py-3 bg-white flex-shrink-0">
 
         {/* Back Button */}
         <button
@@ -945,74 +1068,15 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
           {`${property.propertyName} - ${property.propertyCode}`}
         </h2>
 
-        {/* Global Filter Button */}
-        <button 
-          onClick={handleShowFilter} 
-          className="p-2 hover:bg-zinc-200 rounded-lg transition"
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className="p-2 hover:bg-zinc-200 rounded-lg transition-colors"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
             <path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" />
           </svg>
         </button>
-        {showFilters && (
-        <div className="absolute top-12 left-340 w-96 p-4 bg-white rounded-2xl shadow-xl border border-zinc-200 z-50">
-          <h3 className="text-sm font-semibold mb-3">Screening Filters</h3>
-          <div className="space-y-3">
-            {/* Dropdown filter for Critera */}
-            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
-              <label className="block text-xs font-medium mb-1">
-                Screening Criteria
-              </label>
-              <select
-                value={selectedFilter}
-                onChange={(e) => setSelectedFilter(e.target.value)}
-                className="w-full h-10 border rounded px-2 py-1 text-sm"
-              >
-                <option value="">None</option>
-                <option value="Risk Score">Risk Score</option>
-                <option value="Total Debt">Total Debt</option>
-                <option value="Rent-to-Income">Rent-to-Income</option>
-                <option value="Debt-to-Income">Debt-to-Income</option>
-              </select>
-            </div>
-            
-            {/* Dropdown filter for Sign */}
-            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
-              <label className="block text-xs font-medium mb-1">
-                Filter Type
-              </label>
-              <select
-                value={selectedSign}
-                onChange={(e) => setSelectedSign(e.target.value)}
-                className="w-full h-10 text-sm border rounded px-2 text-sm"
-              >
-                <option value="Greater">{">"}</option>
-                <option value="Equal">{"="}</option>
-                <option value="Less">{"<"}</option>
-              </select>
-            </div>
 
-            <div className="p-3 rounded-lg border border-zinc-200 box-border shadow-sm">
-              <label className="block text-xs font-medium mb-1">Filter Value</label>
-              <input
-                type="text"
-                value={userInput}
-                onChange={(e) => setUserInput(e.target.value)}
-                placeholder="Enter filter value"
-                className="w-full h-10 px-2 text-sm border rounded shadow-sm"
-              />
-            </div>
-            <div className="p-3 flex justify-center rounded-lg border border-zinc-200 box-border shadow-sm">
-              <button 
-                onClick={() => applyFilter()}
-                className="p-2 px-6 bg-[#0A1A33] text-zinc-100 text-lg rounded-full shadow-lg hover:bg-[#13294B] transition-colors" 
-              >
-              Filter Data
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       </div>
 
       <div className="flex-1 flex gap-4 p-6 overflow-hidden">
@@ -1020,7 +1084,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
         {/* Tenant Side */}
         <div className="flex-1 bg-zinc-100 rounded-lg p-4 flex flex-col">
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base font-semibold text-black">Tenants</h3>
+            <h3 className="text-lg font-semibold text-black">Tenants</h3>
             <span className="text-sm text-gray-600 bg-white px-3 py-1 rounded-full">
               {loading ? '...' : `${tenantsToRender.length} active`}
             </span>
@@ -1036,17 +1100,17 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
                 <table className="w-full table-fixed">
                   <thead>
                     <tr className="bg-gray-200 border-b border-gray-300">
-                      <th className="w-16 px-5 py-4 text-center text-md font-semibold text-gray-800 border-r border-gray-300">
+                      <th className="w-24 px-5 py-4 text-center text-md font-semibold text-gray-800 border-r border-gray-300">
                         #
                       </th>
                       <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
                         Tenant Code
                       </th>
                       <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Move In Date
+                        Unit Code
                       </th>
                       <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Move Out Date
+                        Move In Date
                       </th>
                       <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
                         Risk Score
@@ -1059,6 +1123,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
                   <tbody>
                     {tenantsToRender.map((tenant, index) => {
                       const tenantCode = tenant.tscode || tenant;
+                      const unitCode = tenant.uscode || tenant;
                       const isSelected = selectedTenants.includes(tenantCode);
 
                       return (
@@ -1074,10 +1139,10 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
                             {tenantCode}
                           </td>
                           <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {tenant.dtmovein ? new Date(tenant.dtmovein).toLocaleDateString() : '-'}
+                            {unitCode}
                           </td>
                           <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {tenant.dtmoveout ? new Date(tenant.dtmoveout).toLocaleDateString() : '-'}
+                            {tenant.dtmovein ? new Date(tenant.dtmovein).toLocaleDateString() : '-'}
                           </td>
                           <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
                             {tenant.riskscore}
@@ -1109,11 +1174,134 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
           </div>
         </div>
 
+
         {/* EDA / Graphs / Analysis */}
-        <div className="flex-1 bg-zinc-100 rounded-lg p-4 flex flex-col">
-          <h3 className="text-base font-semibold text-black mb-3">Analytics</h3>
-          <div className="flex-1">
-            <p className="text-black">Graphs and charts will be displayed here</p>
+        <div className="flex-1 bg-zinc-100 rounded-lg p-4 flex flex-col relative overflow-hidden">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-semibold text-black">Analytics</h3>
+          </div>
+
+          <div className="flex-1 flex relative">
+
+            {/* Main Content */}
+            <div className={`flex-1 transition-all duration-300 ${showFilters ? 'mr-80' : 'mr-0'}`}>
+              <p className="text-black">Graphs and charts will be displayed here</p>
+            </div>
+
+            <div className={`absolute top-0 right-0 h-full w-4/12 bg-white rounded-lg shadow-md transform transition-all duration-500 ease-out
+                           ${showFilters ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full'}`}>
+
+              <div className="p-8 h-full flex flex-col">
+                <div className="flex items-center justify-between">
+
+                  <h4 className="text-lg font-semibold text-black">Screening Filters</h4>
+
+                  <button
+                    onClick={clearFilters}
+                    className="text-lg font-semibold text-red-500 hover:text-red-700"
+                  >
+                    Clear All
+                  </button>
+                </div>
+
+                <div className="flex-1">
+
+                  <div className="h-full w-full flex flex-col justify-evenly">
+
+                    {/* Search Functionality */}
+                    <h5 className="text-lg font-semibold mb-3 mt-3 text-black">Search</h5>
+
+                    <div className="w-full h-24">
+
+                      {/* Tenant Code Search */}
+                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
+                        Tenant Code
+                      </label>
+                      <input
+                        type="text"
+                        value={tenantSearch}
+                        onChange={(e) => setTenantSearch(e.target.value)}
+                        placeholder="Enter tenant code"
+                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
+                      />
+                    </div>
+
+                    <div className="w-full h-24">
+
+                      {/* Unit Code Search */}
+                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
+                        Unit Code
+                      </label>
+                      <input
+                        type="text"
+                        value={unitSearch}
+                        onChange={(e) => setUnitSearch(e.target.value)}
+                        placeholder="Enter unit code"
+                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
+                      />
+
+                    </div>
+
+                    {/* Screening Criteria */}
+                    <h5 className="text-lg font-semibold mt-3 mb-3 text-black">Screening Filters</h5>
+
+                    <div className="w-full h-24">
+                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
+                        Screening Criteria
+                      </label>
+                      <select
+                        value={selectedFilter}
+                        onChange={(e) => setSelectedFilter(e.target.value)}
+                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
+                      >
+                        <option value="Risk Score">Risk Score</option>
+                        <option value="Total Debt">Total Debt</option>
+                        <option value="Rent-to-Income">Rent-to-Income</option>
+                        <option value="Debt-to-Income">Debt-to-Income</option>
+                      </select>
+                    </div>
+
+                    <div className="w-full h-24">
+                      {/* Filter Type */}
+                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
+                        Filter Type
+                      </label>
+                      <select
+                        value={selectedSign}
+                        onChange={(e) => setSelectedSign(e.target.value)}
+                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
+                      >
+                        <option value="Greater">Greater than (&gt;)</option>
+                        <option value="Equal">Equal to (=)</option>
+                        <option value="Less">Less than (&lt;)</option>
+                      </select>
+                    </div>
+
+                    <div className="w-full h-24">
+                      {/* Filter Value */}
+                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
+                        Filter Value
+                      </label>
+                      <input
+                        type="text"
+                        value={userInput}
+                        onChange={(e) => setUserInput(e.target.value)}
+                        placeholder="Enter value"
+                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Apply Button */}
+                <button
+                  onClick={() => applyFilter()}
+                  className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent filter-button"
+                >
+                  Apply Filter
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1121,7 +1309,7 @@ function PropertyDetail({ property, onBack, tenantData, loading }) {
   );
 }
 
-export function PropertyView() {
+export function PropertyView({ selectedTenants, setSelectedTenants }) {
   const [selectedProperty, setSelectedProperty] = useState(null);
   const [tenantData, setTenantData] = useState({});
   const [loading, setLoading] = useState(true);
@@ -1152,6 +1340,8 @@ export function PropertyView() {
         onBack={() => setSelectedProperty(null)}
         tenantData={tenantData}
         loading={loading}
+        selectedTenants={selectedTenants}
+        setSelectedTenants={setSelectedTenants}
       />
     );
   }
@@ -1159,6 +1349,23 @@ export function PropertyView() {
   return <PropertyList onPropertySelect={setSelectedProperty} />;
 }
 
-export function AtRiskView() {
-  return <p className="p-6 text-sm text-zinc-700">This is the at-risk view</p>;
+export function AtRiskView({ selectedTenants, setSelectedTenants }) {
+
+  useEffect(() => {
+    console.log(selectedTenants)
+  }, [selectedTenants])
+
+
+  return (
+    <div>
+      <p className="p-6 text-sm text-zinc-700 text-center">This is the at-risk view</p>
+      <div className="gap-8 grid grid-cols-8">
+        {selectedTenants.map(tenantCode => (
+          <div key={tenantCode} className="flex justify-center items-center w-[100px] h-[60px] p-4 bg-zinc-200 rounded-lg text-[#0A1A33] shadow-lg">
+            {tenantCode}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
