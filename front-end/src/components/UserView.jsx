@@ -952,47 +952,88 @@ const fieldMap = {
   "Debt-to-Income": "debtincratio",
 };
 
-function PropertyDetail({ property, 
-                          onBack, 
-                          tenantData, 
-                          loading,
-                          selectedTenants,
-                          setSelectedTenants
-}) {
-  const tenants = tenantData[property.propertyCode] || [];
+// NEW: shared helpers for coloring numeric risk scores 0–100
+function riskScoreClasses(score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) {
+    return "bg-zinc-100 text-zinc-600";
+  }
+  if (numeric < 30) return "bg-emerald-100 text-emerald-800";
+  if (numeric < 60) return "bg-amber-100 text-amber-800";
+  if (numeric < 80) return "bg-orange-100 text-orange-800";
+  return "bg-red-100 text-red-800";
+}
 
+function formatRiskScore(score) {
+  const numeric = Number(score);
+  if (!Number.isFinite(numeric)) return "–";
+  return numeric.toFixed(1);
+}
+
+function PropertyDetail({
+  property,
+  onBack,
+  screeningTenantData,
+  transactionTenantData,
+  loading,
+  selectedTenants,
+  setSelectedTenants,
+}) {
+  // Two underlying datasets keyed by propertyCode
+  const tenantsScreening = screeningTenantData[property.propertyCode] || [];
+  const tenantsTransaction =
+    transactionTenantData[property.propertyCode] || [];
+
+  // Which model view are we in?  "screening" | "transactions"
+  const [viewMode, setViewMode] = useState("screening");
+
+  // Screening filter UI state (only used in screening view)
   const [showFilters, setShowFilters] = useState(false);
   const [userInput, setUserInput] = useState("");
-
   const [selectedFilter, setSelectedFilter] = useState("Risk Score");
   const [selectedSign, setSelectedSign] = useState("Greater");
-
   const [tenantSearch, setTenantSearch] = useState("");
-  const [unitSearch, setUnitSearch] = useState("")
-
-  const [filteredTenants, setFilteredTenants] = useState(tenants);
+  const [unitSearch, setUnitSearch] = useState("");
+  const [filteredTenants, setFilteredTenants] = useState(null);
 
   useEffect(() => {
-    console.log(selectedTenants);
-  }, [selectedTenants])
+    console.log("Selected tenants:", selectedTenants);
+  }, [selectedTenants]);
 
   const handleShowFilter = () => {
-    setShowFilters((prev) => !prev); // controls visibility locally
+    setShowFilters((prev) => !prev);
   };
 
-  // function to filter tenants based on current selections
-  const applyFilter = (field = selectedFilter, sign = selectedSign, value = userInput) => {
+  // Only show tenants with move-in / lease dates in 2024+
+  const MIN_DATE_2024 = new Date("2024-01-01");
 
-    console.log(selectedFilter, selectedSign, userInput)
-    let filtered = [...tenants];
+  const screeningBase = tenantsScreening.filter((t) => {
+    if (!t.dtmovein) return false;
+    const d = new Date(t.dtmovein);
+    return !Number.isNaN(d.getTime()) && d >= MIN_DATE_2024;
+  });
 
-    const fieldKey = fieldMap[selectedFilter]; // get the actual object key
-    const valNum = Number(value);
-    if (fieldKey && value && value.trim() !== "") {
-      filtered = tenants.filter((t) => {
+  const transactionBase = tenantsTransaction.filter((t) => {
+    const raw = t.lease_start || t.dtmovein;
+    if (!raw) return false;
+    const d = new Date(raw);
+    return !Number.isNaN(d.getTime()) && d >= MIN_DATE_2024;
+  });
+
+  // Apply numeric + code filters (screening view only)
+  const applyFilter = () => {
+    let filtered = screeningBase;
+
+    const fieldKey = fieldMap[selectedFilter]; // actual object key
+    const valueStr = String(userInput ?? "").trim();
+    const valNum = Number(valueStr);
+
+    // Numeric field filter
+    if (fieldKey && valueStr !== "" && Number.isFinite(valNum)) {
+      filtered = filtered.filter((t) => {
         const v = t[fieldKey];
-        if (v == null) return false; // skip nulls
-        switch (sign) {
+        if (v == null) return false;
+        switch (selectedSign) {
           case "Greater":
             return v > valNum;
           case "Equal":
@@ -1005,26 +1046,36 @@ function PropertyDetail({ property,
       });
     }
 
+    // Tenant code filter
     if (tenantSearch.trim()) {
+      const search = tenantSearch.toLowerCase();
       filtered = filtered.filter((t) => {
-        const code = (t.tscode || '').toString().toLowerCase();
-        return code.includes(tenantSearch.toLowerCase());
-      })
+        const code = (t.tscode || "").toString().toLowerCase();
+        return code.includes(search);
+      });
     }
 
+    // Unit code filter
     if (unitSearch.trim()) {
+      const search = unitSearch.toLowerCase();
       filtered = filtered.filter((t) => {
-        const code = (t.uscode || '').toString().toLowerCase();
-        return code.includes(unitSearch.toLowerCase());
-      })
+        const code = (t.uscode || "").toString().toLowerCase();
+        return code.includes(search);
+      });
     }
 
-    if (!fieldKey && !tenantSearch.trim() && !unitSearch.trim()) {
+    // If nothing is actually filtering, clear instead of keeping a copy
+    if (
+      !fieldKey &&
+      valueStr === "" &&
+      !tenantSearch.trim() &&
+      !unitSearch.trim()
+    ) {
       setFilteredTenants(null);
       return;
     }
 
-    setFilteredTenants(filtered)
+    setFilteredTenants(filtered);
   };
 
   const clearFilters = () => {
@@ -1034,11 +1085,26 @@ function PropertyDetail({ property,
     setTenantSearch("");
     setUnitSearch("");
     setFilteredTenants(null);
-  }
+  };
 
+  // Decide which tenants to show based on view
+  const baseTenants =
+    viewMode === "screening" ? screeningBase : transactionBase;
 
-  // render variable. either shows filtered tenants or all tenants if no filter
-  const tenantsToRender = filteredTenants || tenants;
+  const tenantsToRender =
+    viewMode === "screening"
+      ? filteredTenants || screeningBase
+      : transactionBase;
+
+  // For transactions view, sort high → low eviction risk
+  const tenantsSorted =
+    viewMode === "transactions"
+      ? [...tenantsToRender].sort((a, b) => {
+          const aScore = Number(a?.eviction_risk_score ?? -Infinity);
+          const bScore = Number(b?.eviction_risk_score ?? -Infinity);
+          return bScore - aScore;
+        })
+      : tenantsToRender;
 
   const handleSelectTenant = (tenantCode) => {
     setSelectedTenants((prev) =>
@@ -1048,259 +1114,472 @@ function PropertyDetail({ property,
     );
   };
 
+  const hasTenants = baseTenants && baseTenants.length > 0;
+  const filtersActive = showFilters && viewMode === "screening";
 
   return (
-    <div className="relative w-full h-full flex flex-col bg-white rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-6 py-3 bg-white flex-shrink-0">
+    <div className="relative flex h-full w-full flex-col overflow-hidden rounded-lg bg-white">
+      {/* HEADER */}
+      <div className="flex items-center justify-between border-b bg-white px-6 py-3">
+        {/* Back + property info */}
+        <div className="flex items-center gap-4">
+          <button
+            onClick={onBack}
+            className="rounded-lg p-2 text-zinc-700 hover:bg-zinc-100"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="22"
+              height="22"
+              viewBox="0 0 256 256"
+            >
+              <path
+                fill="currentColor"
+                d="M224 120H59.31l66.35-66.34a8 8 0 0 0-11.32-11.32l-80 80a8 8 0 0 0 0 11.32l80 80a8 8 0 0 0 11.32-11.32L59.31 136H224a8 8 0 0 0 0-16"
+              />
+            </svg>
+          </button>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Property
+            </div>
+            <div className="flex flex-wrap items-baseline gap-2">
+              <h2 className="text-lg font-semibold text-[#0A1A33]">
+                {property.propertyName}
+              </h2>
+              <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+                {property.propertyCode} • {property.propertyId}
+              </span>
+            </div>
+          </div>
+        </div>
 
-        {/* Back Button */}
-        <button
-          onClick={onBack}
-          className="p-2 hover:bg-zinc-200 rounded-lg transition"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
-            <path d="M232,144a64.07,64.07,0,0,1-64,64H80a8,8,0,0,1,0-16h88a48,48,0,0,0,0-96H51.31l34.35,34.34a8,8,0,0,1-11.32,11.32l-48-48a8,8,0,0,1,0-11.32l48-48A8,8,0,0,1,85.66,45.66L51.31,80H168A64.07,64.07,0,0,1,232,144Z" />
-          </svg>
-        </button>
-
-        {/* Property Name */}
-        <h2 className="text-2xl font-semibold text-[#0A1A33]">
-          {`${property.propertyName} - ${property.propertyCode}`}
-        </h2>
-
-        <button
-          onClick={() => setShowFilters(!showFilters)}
-          className="p-2 hover:bg-zinc-200 rounded-lg transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 256 256">
-            <path d="M40,88H73a32,32,0,0,0,62,0h81a8,8,0,0,0,0-16H135a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16Zm64-24A16,16,0,1,1,88,80,16,16,0,0,1,104,64ZM216,168H199a32,32,0,0,0-62,0H40a8,8,0,0,0,0,16h97a32,32,0,0,0,62,0h17a8,8,0,0,0,0-16Zm-48,24a16,16,0,1,1,16-16A16,16,0,0,1,168,192Z" />
-          </svg>
-        </button>
-
-      </div>
-
-      <div className="flex-1 flex gap-4 p-6 overflow-hidden">
-
-        {/* Tenant Side */}
-        <div className="flex-1 bg-zinc-100 rounded-lg p-4 flex flex-col">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold text-black">Tenants</h3>
-            <span className="text-sm text-gray-600 bg-white px-3 py-1 rounded-full">
-              {loading ? '...' : `${tenantsToRender.length} active`}
+        {/* Model toggle + screening filters button */}
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col items-end">
+            <span className="mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-500">
+              Model view
             </span>
+            <div className="inline-flex rounded-full bg-zinc-100 p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setViewMode("screening")}
+                className={`rounded-full px-3 py-1 font-medium transition ${
+                  viewMode === "screening"
+                    ? "bg-[#0A1A33] text-white shadow-sm"
+                    : "text-zinc-700 hover:text-zinc-900"
+                }`}
+              >
+                Screening
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("transactions")}
+                className={`rounded-full px-3 py-1 font-medium transition ${
+                  viewMode === "transactions"
+                    ? "bg-[#0A1A33] text-white shadow-sm"
+                    : "text-zinc-700 hover:text-zinc-900"
+                }`}
+              >
+                Transactions
+              </button>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-auto scrollbar-hide">
-            {loading ? (
-              <div className="flex items-center justify-center h-full">
-                <p className="text-gray-500">Fetching tenants...</p>
+          {viewMode === "screening" && (
+            <button
+              onClick={handleShowFilter}
+              className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 shadow-sm hover:border-[#0A1A33] hover:text-[#0A1A33]"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  fill="currentColor"
+                  d="M4 6h16v2H4zm3 5h10v2H7zm4 5h2v2h-2z"
+                />
+              </svg>
+              <span>Screening filters</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* MAIN CONTENT */}
+      <div className="flex flex-1">
+        {/* Table + analytics */}
+        <div
+          className={`flex-1 p-6 transition-all duration-300 ${
+            filtersActive ? "mr-80" : "mr-0"
+          }`}
+        >
+          {/* Tenants table card */}
+          <div className="mb-6 rounded-2xl border bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b px-4 py-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                  {viewMode === "screening"
+                    ? "Screening model view"
+                    : "Transaction model view"}
+                </div>
+                <div className="mt-1 text-sm text-zinc-600">
+                  {loading
+                    ? "Loading tenants…"
+                    : hasTenants
+                    ? `${baseTenants.length} tenants in this view`
+                    : "No tenants in this view"}
+                </div>
               </div>
-            ) : tenants.length > 0 ? (
-              <div className="bg-white rounded-lg border border-gray-300 overflow-hidden">
-                <table className="w-full table-fixed">
-                  <thead>
-                    <tr className="bg-gray-200 border-b border-gray-300">
-                      <th className="w-24 px-5 py-4 text-center text-md font-semibold text-gray-800 border-r border-gray-300">
-                        #
-                      </th>
-                      <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Tenant Code
-                      </th>
-                      <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Unit Code
-                      </th>
-                      <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Move In Date
-                      </th>
-                      <th className="px-3 py-5 text-left text-md font-semibold text-gray-800 border-r border-gray-300">
-                        Risk Score
-                      </th>
-                      <th className="w-24 py-5 text-center text-md font-semibold text-gray-800">
-                        Select
-                      </th>
+
+              {/* Quick tenant/unit search inputs (screening view) */}
+              {viewMode === "screening" && (
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <input
+                    type="text"
+                    placeholder="Tenant code search"
+                    value={tenantSearch}
+                    onChange={(e) => setTenantSearch(e.target.value)}
+                    className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Unit code search"
+                    value={unitSearch}
+                    onChange={(e) => setUnitSearch(e.target.value)}
+                    className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
+                  />
+                  <button
+                    onClick={applyFilter}
+                    className="rounded-md bg-[#0A1A33] px-3 py-1 text-xs font-semibold text-white hover:bg-[#14284e]"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    onClick={clearFilters}
+                    className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="max-h-[440px] overflow-auto">
+              {loading ? (
+                <div className="flex h-48 items-center justify-center text-sm text-zinc-500">
+                  Loading tenants…
+                </div>
+              ) : hasTenants ? (
+                <table className="min-w-full border-t text-sm">
+                  <thead className="bg-zinc-50 text-xs uppercase tracking-wide text-zinc-500">
+                    <tr>
+                      <th className="px-3 py-2 text-left">#</th>
+                      <th className="px-3 py-2 text-left">Tenant</th>
+                      <th className="px-3 py-2 text-left">Unit</th>
+                      {viewMode === "screening" ? (
+                        <>
+                          <th className="px-3 py-2 text-left">Move in</th>
+                          <th className="px-3 py-2 text-left">Risk score</th>
+                          <th className="px-3 py-2 text-right">Total debt</th>
+                          <th className="px-3 py-2 text-right">
+                            Rent-to-income
+                          </th>
+                          <th className="px-3 py-2 text-right">
+                            Debt-to-income
+                          </th>
+                          <th className="px-3 py-2 text-center">Select</th>
+                        </>
+                      ) : (
+                        <>
+                          <th className="px-3 py-2 text-left">Lease start</th>
+                          <th className="px-3 py-2 text-left">
+                            Eviction risk (0–100)
+                          </th>
+                          <th className="px-3 py-2 text-center">Select</th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
-                    {tenantsToRender.map((tenant, index) => {
-                      const tenantCode = tenant.tscode || tenant;
-                      const unitCode = tenant.uscode || tenant;
-                      const isSelected = selectedTenants.includes(tenantCode);
+                    {tenantsSorted.map((tenant, index) => {
+                      const tenantCode = (tenant.tscode || "").toString();
+                      const unitCode = (tenant.uscode || "").toString();
+                      const isSelected =
+                        selectedTenants.includes(tenantCode);
+
+                      const score =
+                        viewMode === "screening"
+                          ? tenant.riskscore
+                          : tenant.eviction_risk_score;
+                      const scoreDisplay = formatRiskScore(score);
 
                       return (
                         <tr
-                          key={tenantCode || index}
-                          className={`border-b border-gray-300 transition-colors ${isSelected ? "bg-gray-100" : "hover:bg-gray-50"
-                            }`}
+                          key={`${tenantCode}-${unitCode}-${index}`}
+                          className="border-b last:border-b-0 hover:bg-zinc-50"
                         >
-                          <td className="px-3 py-5 text-md text-center text-[#0A1A33] border-r border-gray-300">
+                          {/* Index, tenant, unit — always shown */}
+                          <td className="px-3 py-3 text-xs text-zinc-500">
                             {index + 1}
                           </td>
-                          <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {tenantCode}
+                          <td className="px-3 py-3 text-sm text-[#0A1A33]">
+                            {tenantCode || "—"}
                           </td>
-                          <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {unitCode}
-                          </td>
-                          <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {tenant.dtmovein ? new Date(tenant.dtmovein).toLocaleDateString() : '-'}
-                          </td>
-                          <td className="px-3 py-5 text-md text-[#0A1A33] border-r border-gray-300">
-                            {tenant.riskscore}
-                          </td>
-                          <td className="px-3 py-5 text-center">
-                            <div className="flex items-center justify-center h-full">
-                              <button
-                                onClick={() => handleSelectTenant(tenantCode)}
-                                className={`w-8 h-6 rounded-md border transition-all ${isSelected
-                                  ? "bg-[#0A1A33] border-[#0A1A33]"
-                                  : "border-gray-300 hover:border-[#0A1A33]"
-                                  }`}
-                              />
-                            </div>
+                          <td className="px-3 py-3 text-sm text-[#0A1A33]">
+                            {unitCode || "—"}
                           </td>
 
+                          {viewMode === "screening" ? (
+                            <>
+                              {/* Move-in date (screening view) */}
+                              <td className="px-3 py-3 text-sm text-[#0A1A33]">
+                                {tenant.dtmovein
+                                  ? new Date(
+                                      tenant.dtmovein
+                                    ).toLocaleDateString()
+                                  : "—"}
+                              </td>
+
+                              {/* UNCOLORED screening risk score – plain text */}
+                              <td className="px-3 py-3 text-sm text-[#0A1A33]">
+                                {scoreDisplay}
+                              </td>
+
+                              <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
+                                {tenant.totdebt != null
+                                  ? Number(
+                                      tenant.totdebt
+                                    ).toLocaleString()
+                                  : "—"}
+                              </td>
+                              <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
+                                {tenant.rentincratio != null
+                                  ? `${(
+                                      tenant.rentincratio * 100
+                                    ).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                              <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
+                                {tenant.debtincratio != null
+                                  ? `${(
+                                      tenant.debtincratio * 100
+                                    ).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                              <td className="px-3 py-3 text-center">
+                                <button
+                                  onClick={() =>
+                                    handleSelectTenant(tenantCode)
+                                  }
+                                  className={`h-6 w-8 rounded-md border transition-all ${
+                                    isSelected
+                                      ? "border-[#0A1A33] bg-[#0A1A33]"
+                                      : "border-gray-300 hover:border-[#0A1A33]"
+                                  }`}
+                                  title={
+                                    isSelected
+                                      ? "Remove from at-risk list"
+                                      : "Add to at-risk list"
+                                  }
+                                />
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              {/* Lease start / move-in (transactions view) */}
+                              <td className="px-3 py-3 text-sm text-[#0A1A33]">
+                                {tenant.lease_start
+                                  ? new Date(
+                                      tenant.lease_start
+                                    ).toLocaleDateString()
+                                  : tenant.dtmovein
+                                  ? new Date(
+                                      tenant.dtmovein
+                                    ).toLocaleDateString()
+                                  : "—"}
+                              </td>
+
+                              {/* COLORED eviction risk (0–100) */}
+                              <td className="px-3 py-3">
+                                <span
+                                  className={`inline-flex min-w-[3rem] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${riskScoreClasses(
+                                    score
+                                  )}`}
+                                >
+                                  {scoreDisplay}
+                                </span>
+                              </td>
+
+                              <td className="px-3 py-3 text-center">
+                                <button
+                                  onClick={() =>
+                                    handleSelectTenant(tenantCode)
+                                  }
+                                  className={`h-6 w-8 rounded-md border transition-all ${
+                                    isSelected
+                                      ? "border-[#0A1A33] bg-[#0A1A33]"
+                                      : "border-gray-300 hover:border-[#0A1A33]"
+                                  }`}
+                                  title={
+                                    isSelected
+                                      ? "Remove from at-risk list"
+                                      : "Add to at-risk list"
+                                  }
+                                />
+                              </td>
+                            </>
+                          )}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-center">
-                <p className="text-gray-500 font-medium">No active tenants</p>
-                <p className="text-sm text-gray-400 mt-1">This property currently has no residents</p>
-              </div>
-            )}
+              ) : (
+                <div className="flex h-48 flex-col items-center justify-center text-center">
+                  <p className="text-sm font-medium text-gray-500">
+                    No tenants in this view
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Try switching model views or choosing a different
+                    property.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Analytics placeholder */}
+          <div className="rounded-2xl border bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-black">
+                Analytics
+              </h3>
+              <span className="text-xs text-zinc-500">Coming soon</span>
+            </div>
+            <p className="mt-4 text-sm text-zinc-500">
+              Graphs and charts for this property will be displayed here.
+            </p>
           </div>
         </div>
 
-
-        {/* EDA / Graphs / Analysis */}
-        <div className="flex-1 bg-zinc-100 rounded-lg p-4 flex flex-col relative overflow-hidden">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-semibold text-black">Analytics</h3>
-          </div>
-
-          <div className="flex-1 flex relative">
-
-            {/* Main Content */}
-            <div className={`flex-1 transition-all duration-300 ${showFilters ? 'mr-80' : 'mr-0'}`}>
-              <p className="text-black">Graphs and charts will be displayed here</p>
+        {/* Screening filters side panel */}
+        <div
+          className={`pointer-events-none absolute right-0 top-0 h-full w-80 transform bg-white shadow-md transition-all duration-300 ease-out ${
+            filtersActive
+              ? "pointer-events-auto translate-x-0 opacity-100"
+              : "translate-x-full opacity-0"
+          }`}
+        >
+          <div className="flex h-full flex-col p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-[#0A1A33]">
+                Screening filters
+              </h3>
+              <button
+                onClick={handleShowFilter}
+                className="rounded-full p-2 text-zinc-500 hover:bg-zinc-100"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    fill="currentColor"
+                    d="m18.3 5.71l-1.41-1.42L12 9.17L7.11 4.29L5.7 5.71L10.59 10.6L5.7 15.49l1.41 1.42L12 12.03l4.89 4.88l1.41-1.42L13.41 10.6z"
+                  />
+                </svg>
+              </button>
             </div>
 
-            <div className={`absolute top-0 right-0 h-full w-4/12 bg-white rounded-lg shadow-md transform transition-all duration-500 ease-out
-                           ${showFilters ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-full'}`}>
-
-              <div className="p-8 h-full flex flex-col">
-                <div className="flex items-center justify-between">
-
-                  <h4 className="text-lg font-semibold text-black">Screening Filters</h4>
-
-                  <button
-                    onClick={clearFilters}
-                    className="text-lg font-semibold text-red-500 hover:text-red-700"
-                  >
-                    Clear All
-                  </button>
-                </div>
-
-                <div className="flex-1">
-
-                  <div className="h-full w-full flex flex-col gap-y-2">
-
-                    {/* Search Functionality */}
-                    <h5 className="text-lg font-semibold mb-3 mt-3 text-black">Search</h5>
-
-                    <div className="w-full h-24">
-
-                      {/* Tenant Code Search */}
-                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
-                        Tenant Code
-                      </label>
-                      <input
-                        type="text"
-                        value={tenantSearch}
-                        onChange={(e) => setTenantSearch(e.target.value)}
-                        placeholder="Enter tenant code"
-                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
-                      />
-                    </div>
-
-                    <div className="w-full h-24">
-
-                      {/* Unit Code Search */}
-                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
-                        Unit Code
-                      </label>
-                      <input
-                        type="text"
-                        value={unitSearch}
-                        onChange={(e) => setUnitSearch(e.target.value)}
-                        placeholder="Enter unit code"
-                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
-                      />
-
-                    </div>
-
-                    {/* Screening Criteria */}
-                    <h5 className="text-lg font-semibold mt-3 mb-3 text-black">Filters</h5>
-
-                    <div className="w-full h-24">
-                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
-                        Screening Criteria
-                      </label>
-                      <select
-                        value={selectedFilter}
-                        onChange={(e) => setSelectedFilter(e.target.value)}
-                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
-                      >
-                        <option value="Risk Score">Risk Score</option>
-                        <option value="Total Debt">Total Debt</option>
-                        <option value="Rent-to-Income">Rent-to-Income</option>
-                        <option value="Debt-to-Income">Debt-to-Income</option>
-                      </select>
-                    </div>
-
-                    <div className="w-full h-24">
-                      {/* Filter Type */}
-                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
-                        Filter Type
-                      </label>
-                      <select
-                        value={selectedSign}
-                        onChange={(e) => setSelectedSign(e.target.value)}
-                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
-                      >
-                        <option value="Greater">Greater than (&gt;)</option>
-                        <option value="Equal">Equal to (=)</option>
-                        <option value="Less">Less than (&lt;)</option>
-                      </select>
-                    </div>
-
-                    <div className="w-full h-24">
-                      {/* Filter Value */}
-                      <label className="block text-md font-medium mb-3 text-[#0A1A33]">
-                        Filter Value
-                      </label>
-                      <input
-                        type="text"
-                        value={userInput}
-                        onChange={(e) => setUserInput(e.target.value)}
-                        placeholder="Enter value"
-                        className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Apply Button */}
-                <button
-                  onClick={() => applyFilter()}
-                  className="w-full h-12 px-3 text-md border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#0A1A33] focus:border-transparent filter-button"
+            <div className="space-y-4 text-sm">
+              <div>
+                <label className="text-xs font-medium text-zinc-500">
+                  Numeric field
+                </label>
+                <select
+                  value={selectedFilter}
+                  onChange={(e) => setSelectedFilter(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
                 >
-                  Apply Filter
-                </button>
+                  {Object.keys(fieldMap).map((label) => (
+                    <option key={label} value={label}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">
+                  Comparison
+                </label>
+                <select
+                  value={selectedSign}
+                  onChange={(e) => setSelectedSign(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
+                >
+                  <option value="Greater">Greater than</option>
+                  <option value="Equal">Equal to</option>
+                  <option value="Less">Less than</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">
+                  Value
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">
+                  Tenant code contains
+                </label>
+                <input
+                  type="text"
+                  value={tenantSearch}
+                  onChange={(e) => setTenantSearch(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-medium text-zinc-500">
+                  Unit code contains
+                </label>
+                <input
+                  type="text"
+                  value={unitSearch}
+                  onChange={(e) => setUnitSearch(e.target.value)}
+                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="mt-auto flex gap-2 pt-6">
+              <button
+                onClick={applyFilter}
+                className="flex-1 rounded-md bg-[#0A1A33] px-3 py-2 text-xs font-semibold text-white hover:bg-[#14284e]"
+              >
+                Apply filters
+              </button>
+              <button
+                onClick={clearFilters}
+                className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+              >
+                Clear
+              </button>
             </div>
           </div>
         </div>
@@ -1309,36 +1588,67 @@ function PropertyDetail({ property,
   );
 }
 
+
+
+
 export function PropertyView({ selectedTenants, setSelectedTenants }) {
   const [selectedProperty, setSelectedProperty] = useState(null);
-  const [tenantData, setTenantData] = useState({});
-  const [loading, setLoading] = useState(true);
+
+  const [screeningTenantData, setScreeningTenantData] = useState({});
+  const [transactionTenantData, setTransactionTenantData] = useState({});
+
+  const [loadingScreening, setLoadingScreening] = useState(true);
+  const [loadingTransactions, setLoadingTransactions] = useState(true);
   const [error, setError] = useState(null);
 
+  // Screening model tenants (existing /tenants/active)
   useEffect(() => {
-    fetch('http://127.0.0.1:5000/tenants/active')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch tenant data');
+    fetch("http://127.0.0.1:5000/tenants/active")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to fetch screening tenant data");
         return res.json();
       })
-      .then(data => {
-        setTenantData(data);
-        setLoading(false);
-        console.log(data)
+      .then((data) => {
+        setScreeningTenantData(data || {});
+        setLoadingScreening(false);
+        console.log("Screening tenants:", data);
       })
-      .catch(err => {
-        console.error('Error fetching tenants:', err);
-        setError(err.message);
-        setLoading(false);
+      .catch((err) => {
+        console.error("Error fetching screening tenants:", err);
+        setError((prev) => prev || err.message);
+        setLoadingScreening(false);
       });
   }, []);
+
+  // Transaction model tenants (new /tenants/eviction-risk)
+  useEffect(() => {
+    fetch("http://127.0.0.1:5000/tenants/eviction-risk")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to fetch transaction model data");
+        return res.json();
+      })
+      .then((data) => {
+        setTransactionTenantData(data || {});
+        setLoadingTransactions(false);
+        console.log("Transaction-model tenants:", data);
+      })
+      .catch((err) => {
+        console.error("Error fetching transaction-model tenants:", err);
+        // don't overwrite an existing error if we already have one
+        setError((prev) => prev || err.message);
+        setLoadingTransactions(false);
+      });
+  }, []);
+
+  const loading = loadingScreening || loadingTransactions;
 
   if (selectedProperty) {
     return (
       <PropertyDetail
         property={selectedProperty}
         onBack={() => setSelectedProperty(null)}
-        tenantData={tenantData}
+        screeningTenantData={screeningTenantData}
+        transactionTenantData={transactionTenantData}
         loading={loading}
         selectedTenants={selectedTenants}
         setSelectedTenants={setSelectedTenants}
@@ -1346,8 +1656,10 @@ export function PropertyView({ selectedTenants, setSelectedTenants }) {
     );
   }
 
+  // You could surface `error` somewhere in UI if you want; keeping it silent for now
   return <PropertyList onPropertySelect={setSelectedProperty} />;
 }
+
 
 export function AtRiskView({ selectedTenants, setSelectedTenants }) {
 

@@ -25,6 +25,8 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import roc_auc_score
+from catboost import CatBoostClassifier, Pool
+
 
 # -------------------------------------------------
 # Setup / DB connection
@@ -836,11 +838,40 @@ def _train_rf_with_imputation(X: pd.DataFrame, y: pd.Series):
         print(f"RF training error: {str(e)}")
         return None, None, None
 
-# simple in-memory cache
+# simple in-memory caches
 _FEATURE_IMPORTANCE_CACHE = {
     "last_meta_ts": None,
     "payload": None,
 }
+
+# NEW: cache for transaction-model eviction scores
+_TRANSACTION_MODEL_CACHE = {
+    "last_meta_ts": None,
+    "payload": None,
+}
+
+def _map_flag(x):
+    """
+    Normalize a yes/no-style flag into {1, 0, NaN}.
+    Used to build the sevicted label for the transaction model.
+    """
+    import math
+
+    if x is None:
+        return float("nan")
+    try:
+        if isinstance(x, float) and math.isnan(x):
+            return float("nan")
+    except TypeError:
+        pass
+
+    val = str(x).strip().upper()
+    if val in ("Y", "YES", "1", "TRUE", "T"):
+        return 1
+    if val in ("N", "NO", "0", "FALSE", "F"):
+        return 0
+    return float("nan")
+
 
 def _latest_meta_ts():
     """Return latest updated_at from meta_updates, or None if table empty."""
@@ -917,6 +948,220 @@ def _compute_feature_importance_payload():
         "auc": float(auc),
         "top_features": top_features
     }
+
+def _compute_transaction_model_payload():
+    """
+    Train a CatBoost model on historical transaction data to predict eviction,
+    then return 0–100 eviction risk scores for the 2024+ cohort,
+    grouped by property code.
+    """
+    q = """
+    SELECT
+        pscode,
+        tscode,
+        uscode,
+        dtleasefrom,
+        dtleaseto,
+        dtmovein,
+        dtmoveout,
+        dnumnsf,
+        dnumlate,
+        davgdayslate,
+        drentwrittenoff,
+        dnonrentwrittenoff,
+        damoutcollections,
+        srenewed,
+        srent,
+        sfulfilledterm,
+        dincome,
+        sevicted
+    FROM transacts
+    WHERE pscode IS NOT NULL
+      AND tscode IS NOT NULL
+      AND dtmovein IS NOT NULL;
+    """
+
+    df = pd.read_sql(q, conn)
+
+    if df.empty or "sevicted" not in df.columns:
+        return {}
+
+    # Normalize dates
+    for col in ["dtleasefrom", "dtleaseto", "dtmovein", "dtmoveout"]:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # Binary label from sevicted
+    def _map_flag(x):
+        if x is None:
+            return np.nan
+        s = str(x).strip().lower()
+        if s in ("yes", "y", "1", "true"):
+            return 1
+        if s in ("no", "n", "0", "false"):
+            return 0
+        return np.nan
+
+    df["sevicted_flag"] = df["sevicted"].apply(_map_flag)
+    df = df[~df["sevicted_flag"].isna()].copy()
+    if len(df) < 100:
+        # Not enough labeled data to train a reasonable model
+        return {}
+
+    df["label"] = df["sevicted_flag"].astype(int)
+
+    # Lease start: prefer dtleasefrom, fallback to dtmovein
+    df["lease_start"] = df["dtleasefrom"].where(
+        df["dtleasefrom"].notna(),
+        df["dtmovein"]
+    )
+    df = df[~df["lease_start"].isna()].copy()
+    df["start_year"] = df["lease_start"].dt.year
+
+    # Train on <= 2023, score on >= 2024
+    train_df = df[df["start_year"] <= 2023].copy()
+    test_df = df[df["start_year"] >= 2024].copy()
+
+    # NEW: further restrict scored cohort to move-ins in 2024+ (per your requirement)
+    min_movein = pd.Timestamp("2024-01-01")
+    if "dtmovein" in test_df.columns:
+        test_df = test_df[test_df["dtmovein"] >= min_movein].copy()
+
+    # If we don't have both sides, bail out gracefully
+    if train_df.empty or test_df.empty:
+        return {}
+
+    # Basic feature engineering (same for train/test)
+    for df_ in (train_df, test_df):
+        # Payment behavior ratios
+        df_["late_ratio"] = (df_["dnumlate"] / df_["dnumnsf"]).replace(
+            [np.inf, -np.inf], np.nan
+        )
+        df_["wo_total"] = (df_["drentwrittenoff"] + df_["dnonrentwrittenoff"]).fillna(0)
+        df_["collections_flag"] = (df_["damoutcollections"].fillna(0) > 0).astype(int)
+        df_["renewed_flag"] = df_["srenewed"].astype(str).str.lower().isin(
+            ["yes", "y", "1", "true"]
+        )
+        df_["fulfilled_flag"] = df_["sfulfilledterm"].astype(str).str.lower().isin(
+            ["yes", "y", "1", "true"]
+        )
+
+        # Income / rent ratios
+        df_["rent_to_income"] = np.where(
+            df_["dincome"].notna() & (df_["dincome"] > 0),
+            df_["srent"] / df_["dincome"],
+            np.nan,
+        )
+
+        # Tenure as numeric
+        df_["tenure_days"] = (df_["dtmoveout"].fillna(pd.Timestamp("today")) - df_["dtmovein"]).dt.days
+
+    candidate_cols = [
+        "dnumnsf",
+        "dnumlate",
+        "davgdayslate",
+        "drentwrittenoff",
+        "dnonrentwrittenoff",
+        "damoutcollections",
+        "srent",
+        "dincome",
+        "late_ratio",
+        "wo_total",
+        "collections_flag",
+        "renewed_flag",
+        "fulfilled_flag",
+        "rent_to_income",
+        "tenure_days",
+    ]
+
+    # Only keep columns actually present
+    candidate_cols = [c for c in candidate_cols if c in train_df.columns]
+
+    # Do not leak the label or sevicted text itself
+    leakage_cols = ["sevicted", "sevicted_flag", "label"]
+    FEATURES = [c for c in candidate_cols if c not in leakage_cols]
+
+    if not FEATURES:
+        return {}
+
+    X_train = train_df[FEATURES].copy()
+    y_train = train_df["label"].copy()
+    X_test = test_df[FEATURES].copy()
+    y_test = test_df["label"].copy()  # NEW: target for eval set
+
+    # Simple numeric imputation
+    for col in FEATURES:
+        if X_train[col].dtype.kind in "biufc":
+            median = X_train[col].median()
+            X_train[col] = X_train[col].fillna(median)
+            X_test[col] = X_test[col].fillna(median)
+        else:
+            mode = X_train[col].mode(dropna=True)
+            fill_value = mode.iloc[0] if not mode.empty else ""
+            X_train[col] = X_train[col].fillna(fill_value)
+            X_test[col] = X_test[col].fillna(fill_value)
+
+    # If you ever add categoricals, list their indices here
+    cat_features_idx = []
+
+    train_pool = Pool(X_train, label=y_train, cat_features=cat_features_idx)
+    # NEW: test_pool now has labels, satisfying AUC requirement
+    test_pool = Pool(X_test, label=y_test, cat_features=cat_features_idx)
+
+    model = CatBoostClassifier(
+        loss_function="Logloss",
+        eval_metric="AUC",
+        depth=6,
+        learning_rate=0.05,
+        iterations=800,
+        l2_leaf_reg=5,
+        random_seed=42,
+        auto_class_weights="Balanced",
+        od_type="Iter",
+        od_wait=200,
+        verbose=False,
+    )
+
+    model.fit(train_pool, eval_set=test_pool, use_best_model=True)
+
+    y_proba_test = model.predict_proba(test_pool)[:, 1]
+    risk_score_0_100 = (y_proba_test * 100).round(1)
+
+    test_df = test_df.copy()
+    test_df["eviction_risk_score"] = risk_score_0_100
+
+    # Build property -> tenants mapping (only 2024+ cohort)
+    out = {}
+    for _, row in test_df.iterrows():
+        pscode = row.get("pscode")
+        if not pscode:
+            continue
+
+        if pscode not in out:
+            out[pscode] = []
+
+        lease_start_val = row.get("lease_start")
+        dtmovein_val = row.get("dtmovein")
+        dtmoveout_val = row.get("dtmoveout")
+
+        out[pscode].append(
+            {
+                "tscode": row.get("tscode"),
+                "uscode": row.get("uscode"),
+                "lease_start": lease_start_val.date().isoformat()
+                if pd.notna(lease_start_val)
+                else None,
+                "dtmovein": dtmovein_val.isoformat()
+                if pd.notna(dtmovein_val)
+                else None,
+                "dtmoveout": dtmoveout_val.isoformat()
+                if pd.notna(dtmoveout_val)
+                else None,
+                "eviction_risk_score": float(row.get("eviction_risk_score") or 0.0),
+            }
+        )
+
+    return out
 
 
 # @app.route("/upload", methods=["POST"])
@@ -1053,6 +1298,36 @@ def feature_importance():
             "top_features": []
         }), 200
     
+@app.route("/tenants/eviction-risk", methods=["GET"])
+def get_tenants_eviction_risk():
+    """
+    Transaction-model eviction risk scores (0–100) for tenants whose
+    lease start is in 2024 or later, grouped by property code.
+
+    Shape mirrors /tenants/active: { pscode: [ { ... }, ... ] }.
+    """
+    try:
+        current_ts = _latest_meta_ts()
+
+        # Simple cache so we don't retrain the model for every property click
+        if (
+            _TRANSACTION_MODEL_CACHE.get("payload") is not None
+            and _TRANSACTION_MODEL_CACHE.get("last_meta_ts") == current_ts
+        ):
+            return jsonify(_TRANSACTION_MODEL_CACHE["payload"]), 200
+
+        payload = _compute_transaction_model_payload()
+        _TRANSACTION_MODEL_CACHE["payload"] = payload
+        _TRANSACTION_MODEL_CACHE["last_meta_ts"] = current_ts
+
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"Eviction risk model error: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        # Fail soft – frontend will simply show "no tenants" for this view.
+        return jsonify({}), 200
 
 
 # -------------------------------------------------
@@ -1060,37 +1335,28 @@ def feature_importance():
 # -------------------------------------------------
 
 @app.route('/tenants/active', methods=['GET'])
+@app.route('/tenants/active', methods=['GET'])
 def get_tenants():
-    # query = """
-    # SELECT pscode, tscode, dtmovein, dtmoveout
-    # FROM transacts
-    # WHERE pscode IS NOT NULL 
-    # AND tscode IS NOT NULL
-    # AND dtmovein IS NOT NULL
-    # AND dtmovein <= DATE '2025-04-01'
-    # AND (dtmoveout IS NULL OR dtmoveout > DATE '2025-04-01')
-    # ORDER BY pscode, tscode
-    # """
     query = """
     SELECT 
-    t.pscode,
-    t.tscode,
-    t.uscode,
-    t.dtmovein,
-    t.dtmoveout,
-    s.riskscore,
-    s.totdebt,
-    s.rentincratio,
-    s.debtincratio
+        t.pscode,
+        t.tscode,
+        t.uscode,
+        t.dtmovein,
+        t.dtmoveout,
+        s.riskscore,
+        s.totdebt,
+        s.rentincratio,
+        s.debtincratio
     FROM transacts t
     LEFT JOIN screening s
         ON t.tscode = s.voyappcode
     WHERE t.pscode IS NOT NULL
-    AND t.tscode IS NOT NULL
-    AND t.dtmovein IS NOT NULL
-    AND t.dtmovein <= DATE '2025-04-01'
-    AND (t.dtmoveout IS NULL OR t.dtmoveout > DATE '2025-04-01')
-    ORDER BY s.riskscore ASC;
+      AND t.tscode IS NOT NULL
+      AND t.dtmovein IS NOT NULL
+      AND t.dtmovein >= DATE '2024-01-01'
+      AND (t.dtmoveout IS NULL OR t.dtmoveout > DATE '2025-04-01')
+    ORDER BY t.dtmovein DESC, t.tscode;
     """
 
     try:
