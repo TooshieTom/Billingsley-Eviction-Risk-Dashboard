@@ -1375,7 +1375,7 @@
                               {/* Rent-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.rentincratio != null
-                                  ? `${(tenant.rentincratio * 100).toFixed(
+                                  ? `${(tenant.rentincratio).toFixed(
                                       1
                                     )}%`
                                   : "—"}
@@ -1384,7 +1384,7 @@
                               {/* Debt-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.debtincratio != null
-                                  ? `${(tenant.debtincratio * 100).toFixed(
+                                  ? `${(tenant.debtincratio).toFixed(
                                       1
                                     )}%`
                                   : "—"}
