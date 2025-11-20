@@ -850,6 +850,12 @@ _TRANSACTION_MODEL_CACHE = {
     "payload": None,
 }
 
+_SCREENING_MODEL_CACHE = {
+    "last_meta_ts": None,
+    "payload": None,
+}
+
+
 def _map_flag(x):
     """
     Normalize a yes/no-style flag into {1, 0, NaN}.
@@ -1163,6 +1169,328 @@ def _compute_transaction_model_payload():
 
     return out
 
+def _compute_screening_model_payload():
+    """
+    Train a CatBoost model using screening + early-transaction features
+    to predict eviction (sevicted), then score the 2024+ "active"
+    tenant cohort (same definition as /tenants/active).
+
+    Returns:
+      {
+        pscode: [
+          {
+            "tscode": ...,
+            "uscode": ...,
+            "dtmovein": "YYYY-MM-DD",
+            "dtmoveout": "YYYY-MM-DD" | None,
+            "riskscore": float | None,
+            "totdebt": float | None,
+            "rentincratio": float | None,
+            "debtincratio": float | None,
+            "eviction_risk_score": float | None
+          },
+          ...
+        ],
+        ...
+      }
+    """
+    import pandas as pd
+    import numpy as np
+    from sklearn.model_selection import train_test_split
+    from catboost import CatBoostClassifier, Pool
+
+    # -------------------------------
+    # Helpers copied from notebook
+    # -------------------------------
+    YES_SET = {"Y", "YES", "TRUE", "T", "1"}
+    NO_SET  = {"N", "NO", "FALSE", "F", "0"}
+
+    def map_flag(x):
+        """Notebook-style Y/N -> {1,0} mapping for sevicted/flags."""
+        if pd.isna(x):
+            return np.nan
+        x = str(x).strip().upper()
+        if x in YES_SET:
+            return 1
+        if x in NO_SET:
+            return 0
+        return np.nan
+
+    def coerce_numeric_series(s: pd.Series) -> pd.Series:
+        """
+        Notebook-style numeric coercion:
+        strip $, %, commas, and parentheses, then to_numeric.
+        """
+        s_clean = (
+            s.astype(str)
+             .str.replace(r"[,$%]", "", regex=True)
+             .str.replace(r"\(", "-", regex=True)
+             .str.replace(r"\)", "", regex=True)
+             .str.strip()
+        )
+        return pd.to_numeric(s_clean, errors="coerce")
+
+    # -------------------------------
+    # 1) Build labelled training set
+    # -------------------------------
+    # IMPORTANT: inner join so we only keep tenants that have BOTH
+    # transaction rows AND screening rows that successfully merge.
+    q_train = """
+        SELECT
+            t.pscode,
+            t.tscode,
+            t.sevicted,
+            t.dnumnsf,
+            t.dnumlate,
+            t.davgdayslate,
+            t.srent,
+            t.dincome,
+            t.daypaid,
+            t.dpaysourcechange,
+            s.riskscore,
+            s.totdebt,
+            s.rentincratio,
+            s.debtincratio,
+            s.age,
+            s.currempmon,
+            s.currempyear,
+            s.currresmon,
+            s.currresyear,
+            s.debtcredratio
+        FROM transacts t
+        INNER JOIN screening s
+            ON t.tscode = s.voyappcode
+        WHERE t.pscode IS NOT NULL
+          AND t.tscode IS NOT NULL
+          AND t.sevicted IS NOT NULL
+          AND s.voyappcode IS NOT NULL;
+    """
+    train_df = pd.read_sql(q_train, conn)
+
+    if train_df.empty or "sevicted" not in train_df.columns:
+        return {}
+
+    # Binary label from sevicted (notebook-style)
+    train_df["label"] = train_df["sevicted"].apply(map_flag)
+    train_df = train_df[~train_df["label"].isna()].copy()
+
+    if train_df["label"].nunique() < 2 or len(train_df) < 100:
+        # Not enough signal to train a meaningful model
+        return {}
+
+    train_df["label"] = train_df["label"].astype(int)
+
+    # Numeric feature set (screening + early transaction features)
+    SCREENING_FEATURES = [
+        "dnumnsf",
+        "dnumlate",
+        "davgdayslate",
+        "srent",
+        "dincome",
+        "daypaid",
+        "dpaysourcechange",
+        "riskscore",
+        "totdebt",
+        "rentincratio",
+        "debtincratio",
+        "age",
+        "currempmon",
+        "currempyear",
+        "currresmon",
+        "currresyear",
+        "debtcredratio",
+    ]
+    used_features = [c for c in SCREENING_FEATURES if c in train_df.columns]
+
+    if not used_features:
+        return {}
+
+    # Notebook-style numeric coercion on numeric-like object columns FIRST
+    for c in used_features:
+        if c in train_df.columns:
+            if train_df[c].dtype == "object":
+                train_df[c] = coerce_numeric_series(train_df[c])
+            # Final guard: ensure numeric dtype
+            train_df[c] = pd.to_numeric(train_df[c], errors="coerce")
+
+    X_train_full = train_df[used_features].copy()
+    y_train_full = train_df["label"].copy()
+
+    # ONLY keep rows that actually have screening data (at least one of these non-null)
+    screening_cols = [
+        c
+        for c in ["riskscore", "totdebt", "rentincratio", "debtincratio"]
+        if c in X_train_full.columns
+    ]
+    if screening_cols:
+        mask_has_screening = X_train_full[screening_cols].notna().any(axis=1)
+        X_train_full = X_train_full[mask_has_screening]
+        y_train_full = y_train_full[mask_has_screening]
+
+    if X_train_full.empty or y_train_full.nunique() < 2 or len(X_train_full) < 100:
+        return {}
+
+    # Median imputation for numeric features (keep medians to reuse on scoring set)
+    medians = {}
+    for c in used_features:
+        med = X_train_full[c].median()
+        medians[c] = med
+        X_train_full[c] = X_train_full[c].fillna(med)
+
+    # Train/validation split for basic sanity-check AUC
+    try:
+        X_train, X_valid, y_train, y_valid = train_test_split(
+            X_train_full,
+            y_train_full,
+            test_size=0.2,
+            random_state=42,
+            stratify=y_train_full,
+        )
+    except ValueError:
+        # Fallback if stratification fails
+        X_train, X_valid, y_train, y_valid = train_test_split(
+            X_train_full,
+            y_train_full,
+            test_size=0.2,
+            random_state=42,
+        )
+
+    # Class weight for imbalance (same as notebook)
+    pos_count = (y_train == 1).sum()
+    neg_count = (y_train == 0).sum()
+    pos_weight = float(neg_count) / float(pos_count) if pos_count > 0 else 1.0
+
+    # CatBoost with tuned params from notebook
+    model = CatBoostClassifier(
+        loss_function="Logloss",
+        eval_metric="AUC",
+        depth=5,
+        learning_rate=0.01,
+        iterations=500,
+        l2_leaf_reg=3,
+        border_count=32,
+        bagging_temperature=0.0,
+        random_seed=42,
+        class_weights=[1.0, pos_weight],
+        verbose=False,
+    )
+
+    train_pool = Pool(X_train, label=y_train)
+    valid_pool = Pool(X_valid, label=y_valid)
+    model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+
+    # -------------------------------
+    # 2) Scoring cohort: same as /tenants/active,
+    #    but ONLY where screening data exists
+    # -------------------------------
+    q_score = """
+        SELECT 
+            t.pscode,
+            t.tscode,
+            t.uscode,
+            t.dtmovein,
+            t.dtmoveout,
+            s.riskscore,
+            s.totdebt,
+            s.rentincratio,
+            s.debtincratio,
+            t.dnumnsf,
+            t.dnumlate,
+            t.davgdayslate,
+            t.srent,
+            t.dincome,
+            t.daypaid,
+            t.dpaysourcechange,
+            s.age,
+            s.currempmon,
+            s.currempyear,
+            s.currresmon,
+            s.currresyear,
+            s.debtcredratio
+        FROM transacts t
+        INNER JOIN screening s
+            ON t.tscode = s.voyappcode
+        WHERE t.pscode IS NOT NULL
+          AND t.tscode IS NOT NULL
+          AND t.dtmovein IS NOT NULL
+          AND s.voyappcode IS NOT NULL
+          AND t.dtmovein >= DATE '2024-01-01'
+    """
+    score_df = pd.read_sql(q_score, conn)
+
+    if score_df.empty:
+        return {}
+
+    # Apply same numeric-like cleaning to scoring set
+    for c in used_features:
+        if c in score_df.columns:
+            if score_df[c].dtype == "object":
+                score_df[c] = coerce_numeric_series(score_df[c])
+            score_df[c] = pd.to_numeric(score_df[c], errors="coerce")
+        else:
+            score_df[c] = np.nan
+
+    # Only keep scoring rows where we actually have screening info
+    screening_cols_score = [
+        c
+        for c in ["riskscore", "totdebt", "rentincratio", "debtincratio"]
+        if c in score_df.columns
+    ]
+    if screening_cols_score:
+        mask_has_screening = score_df[screening_cols_score].notna().any(axis=1)
+        score_df = score_df[mask_has_screening].copy()
+        if score_df.empty:
+            return {}
+
+    X_score = score_df[used_features].copy()
+    for c in used_features:
+        med = medians.get(c, 0.0)
+        X_score[c] = X_score[c].fillna(med)
+
+    score_pool = Pool(X_score)
+    proba = model.predict_proba(score_pool)[:, 1]
+    scores_0_100 = (proba * 100.0).round(1)
+
+    score_df = score_df.copy()
+    score_df["eviction_risk_score"] = scores_0_100
+
+    def _safe_float(v):
+        return float(v) if v is not None and not pd.isna(v) else None
+
+    out = {}
+    for _, row in score_df.iterrows():
+        pscode = row.get("pscode")
+        if not pscode:
+            continue
+
+        if pscode not in out:
+            out[pscode] = []
+
+        dtmovein_val = row.get("dtmovein")
+        dtmoveout_val = row.get("dtmoveout")
+
+        out[pscode].append(
+            {
+                "tscode": row.get("tscode"),
+                "uscode": row.get("uscode"),
+                "dtmovein": dtmovein_val.isoformat()
+                if dtmovein_val is not None and not pd.isna(dtmovein_val)
+                else None,
+                "dtmoveout": dtmoveout_val.isoformat()
+                if dtmoveout_val is not None and not pd.isna(dtmoveout_val)
+                else None,
+                # keep raw screening criteria for filters
+                "riskscore": _safe_float(row.get("riskscore")),
+                "totdebt": _safe_float(row.get("totdebt")),
+                "rentincratio": _safe_float(row.get("rentincratio")),
+                "debtincratio": _safe_float(row.get("debtincratio")),
+                # model-based eviction risk (0–100)
+                "eviction_risk_score": _safe_float(row.get("eviction_risk_score")),
+            }
+        )
+
+    return out
+
 
 # @app.route("/upload", methods=["POST"])
 # def upload_file():
@@ -1266,6 +1594,53 @@ def _compute_transaction_model_payload():
 #     # Touch meta_updates
 #     cursor.execute("INSERT INTO meta_updates (updated_at) VALUES (NOW())")
 #     return jsonify({"message": f"{filename} uploaded successfully"}), 200
+
+@app.route("/tenants/screening-eviction-risk", methods=["GET"])
+def get_tenants_screening_eviction_risk():
+    """
+    Screening+transactions model eviction risk scores (0–100) for the same
+    active cohort as /tenants/active, grouped by property code.
+
+    Shape:
+      {
+        pscode: [
+          {
+            "tscode": ...,
+            "uscode": ...,
+            "dtmovein": "YYYY-MM-DD",
+            "dtmoveout": "YYYY-MM-DD" | None,
+            "riskscore": float | None,
+            "totdebt": float | None,
+            "rentincratio": float | None,
+            "debtincratio": float | None,
+            "eviction_risk_score": float | None
+          },
+          ...
+        ]
+      }
+    """
+    try:
+        current_ts = _latest_meta_ts()
+
+        if (
+            _SCREENING_MODEL_CACHE.get("payload") is not None
+            and _SCREENING_MODEL_CACHE.get("last_meta_ts") == current_ts
+        ):
+            return jsonify(_SCREENING_MODEL_CACHE["payload"]), 200
+
+        payload = _compute_screening_model_payload()
+        _SCREENING_MODEL_CACHE["payload"] = payload
+        _SCREENING_MODEL_CACHE["last_meta_ts"] = current_ts
+
+        return jsonify(payload), 200
+    except Exception as e:
+        print(f"Screening eviction risk model error: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        # Fail soft – frontend will just see no tenants for this view.
+        return jsonify({}), 200
+
 
 @app.route("/features/importance", methods=["GET", "OPTIONS"])
 def feature_importance():

@@ -1,976 +1,976 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Header, UserNavigation } from "./DashboardComponents";
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts";
+    import { useEffect, useMemo, useRef, useState } from "react";
+    import { Header, UserNavigation } from "./DashboardComponents";
+    import {
+      LineChart,
+      Line,
+      XAxis,
+      YAxis,
+      CartesianGrid,
+      Tooltip,
+      Legend,
+      ResponsiveContainer,
+    } from "recharts";
 
-const monthNames = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+    const monthNames = [
+      "January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December",
+    ];
 
-function yyyymmToParts(ym) {
-  if (!ym) return null;
-  const [y, m] = ym.split("-");
-  return { y: parseInt(y, 10), mIdx: parseInt(m, 10) - 1 };
-}
-
-function prettyMonthYear(ym) {
-  if (!ym) return "";
-  const parts = yyyymmToParts(ym);
-  if (!parts) return "";
-  return `${monthNames[parts.mIdx]} ${parts.y}`;
-}
-
-function dateObjToISO(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function todayISO() {
-  const d = new Date();
-  return dateObjToISO(d);
-}
-
-/* ============================================================
-   CLONE NODE + INLINE STYLES (for PNG export)
-   ============================================================ */
-function cloneWithComputedStyles(sourceNode) {
-  const clone = sourceNode.cloneNode(true);
-
-  function applyAllStyles(srcEl, dstEl) {
-    const computed = window.getComputedStyle(srcEl);
-
-    for (let i = 0; i < computed.length; i++) {
-      const propName = computed[i];
-      const val = computed.getPropertyValue(propName);
-      if (!val) continue;
-      if (typeof val === "string" && val.includes("oklch")) continue;
-      dstEl.style.setProperty(propName, val, "important");
+    function yyyymmToParts(ym) {
+      if (!ym) return null;
+      const [y, m] = ym.split("-");
+      return { y: parseInt(y, 10), mIdx: parseInt(m, 10) - 1 };
     }
 
-    const srcKids = srcEl.children;
-    const dstKids = dstEl.children;
-    for (let j = 0; j < srcKids.length; j++) {
-      applyAllStyles(srcKids[j], dstKids[j]);
+    function prettyMonthYear(ym) {
+      if (!ym) return "";
+      const parts = yyyymmToParts(ym);
+      if (!parts) return "";
+      return `${monthNames[parts.mIdx]} ${parts.y}`;
     }
-  }
 
-  applyAllStyles(sourceNode, clone);
-  return clone;
-}
-
-/* =========================
-   SMALL HOOK: DEBOUNCE A VALUE
-   ========================= */
-function useDebounced(value, delayMs = 300) {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delayMs);
-    return () => clearTimeout(t);
-  }, [value, delayMs]);
-  return debounced;
-}
-
-/* =========================
-   INLINE DATE INPUT
-   ========================= */
-function DateDropdown({ label, valueISO, onChangeISO }) {
-  return (
-    <div className="flex flex-col">
-      <div className="text-xs text-zinc-500 mb-1">{label}</div>
-      <input
-        type="date"
-        className="min-w-[11rem] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
-        value={valueISO}
-        onChange={(e) => {
-          onChangeISO(e.target.value);
-        }}
-      />
-    </div>
-  );
-}
-
-/* =========================
-   PROPERTY MULTISELECT
-   ========================= */
-function PropertyMultiSelect({
-  options,
-  selected,
-  setSelected,
-  dropdownId,
-  openDropdown,
-  setOpenDropdown,
-}) {
-  const wrapperRef = useRef(null);
-  const isOpen = openDropdown === dropdownId;
-
-  const allSelected =
-    selected.length === options.length && options.length > 0;
-
-  function toggleOne(code) {
-    if (selected.includes(code)) {
-      setSelected(selected.filter((c) => c !== code));
-    } else {
-      setSelected([...selected, code]);
+    function dateObjToISO(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
     }
-  }
 
-  function selectAll() {
-    setSelected(options.slice());
-  }
+    function todayISO() {
+      const d = new Date();
+      return dateObjToISO(d);
+    }
 
-  function clearAll() {
-    setSelected([]);
-  }
+    /* ============================================================
+       CLONE NODE + INLINE STYLES (for PNG export)
+       ============================================================ */
+    function cloneWithComputedStyles(sourceNode) {
+      const clone = sourceNode.cloneNode(true);
 
-  useEffect(() => {
-    function handleClickOutside(e) {
-      if (!wrapperRef.current) return;
-      if (!wrapperRef.current.contains(e.target)) {
-        if (openDropdown === dropdownId) {
-          setOpenDropdown(null);
+      function applyAllStyles(srcEl, dstEl) {
+        const computed = window.getComputedStyle(srcEl);
+
+        for (let i = 0; i < computed.length; i++) {
+          const propName = computed[i];
+          const val = computed.getPropertyValue(propName);
+          if (!val) continue;
+          if (typeof val === "string" && val.includes("oklch")) continue;
+          dstEl.style.setProperty(propName, val, "important");
+        }
+
+        const srcKids = srcEl.children;
+        const dstKids = dstEl.children;
+        for (let j = 0; j < srcKids.length; j++) {
+          applyAllStyles(srcKids[j], dstKids[j]);
         }
       }
+
+      applyAllStyles(sourceNode, clone);
+      return clone;
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [openDropdown, dropdownId, setOpenDropdown]);
 
-  let summary = "Properties";
-  if (selected.length === 1) summary = selected[0];
-  else if (allSelected) summary = "All";
-  else if (selected.length > 1) summary = `${selected.length} selected`;
-
-  return (
-    <div className="flex flex-col relative" ref={wrapperRef}>
-      <div className="text-xs text-zinc-500 mb-1">Properties</div>
-
-      <button
-        className="min-w-[10rem] flex items-center justify-between rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-zinc-50"
-        onClick={() => {
-          setOpenDropdown(isOpen ? null : dropdownId);
-        }}
-        type="button"
-      >
-        <span className="truncate max-w-[8rem]">{summary}</span>
-        <span className="text-zinc-400 text-xs">▾</span>
-      </button>
-
-      {isOpen && (
-        <div
-          className="absolute z-50 mt-2 max-h-60 w-48 overflow-y-auto rounded-xl border border-zinc-300 bg-white text-sm shadow-xl p-1 space-y-1
-                     left-1/2 -translate-x-1/2 transform"
-        >
-          <div className="flex gap-2 justify-center text-center">
-            <button
-              className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] hover:bg-zinc-50"
-              onClick={selectAll}
-              type="button"
-            >
-              Select all
-            </button>
-            <button
-              className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] hover:bg-zinc-50"
-              onClick={clearAll}
-              type="button"
-            >
-              Clear
-            </button>
-          </div>
-
-          <div className="border-t border-zinc-200" />
-
-          <div className="max-h-40 overflow-y-auto space-y-[2px] pr-1 flex flex-col items-center">
-            {options.map((code) => (
-              <label
-                key={code}
-                className="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-zinc-100 rounded-lg px-1 py-[1px] w-full justify-center"
-              >
-                <input
-                  type="checkbox"
-                  className="cursor-pointer"
-                  checked={selected.includes(code)}
-                  onChange={() => toggleOne(code)}
-                />
-                <span className="truncate">{code}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* =========================
-   MAIN SHELL (header/nav chrome)
-   ========================= */
-export default function UserView({ user, onSwapView, onLogout }) {
-  const [selectedTenants, setSelectedTenants] = useState([]);
-  const [activeView, setActiveView] = useState("portfolio");
-  return (
-    <div className="fixed w-screen h-screen bg-zinc-700 flex flex-col">
-      <div className="w-full">
-        <Header user={user} onSwapView={onSwapView} onLogout={onLogout} />
-      </div>
-
-      <div className="flex-grow flex justify-center items-center p-8 min-h-0">
-        <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
-          <div className="flex-grow flex justify-center items-stretch overflow-hidden p-4">
-            {activeView === "portfolio" && <PortfolioView />}
-            {activeView === "property" && <PropertyView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
-            {activeView === "at-risk" && <AtRiskView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
-          </div>
-          <div className="w-full">
-            <UserNavigation
-              activeView={activeView}
-              setActiveView={setActiveView}
-            />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =========================
-   FILTER STATE HOOK
-   ========================= */
-function useFilters() {
-  const [options, setOptions] = useState({ pscodes: [], screenresults: [] });
-
-  const [pscodes, setPscodes] = useState([]);
-  const [screenresult, setScreenresult] = useState(null);
-  const [collections, setCollections] = useState("any");
-  const [evicted, setEvicted] = useState("any");
-
-  const [startISO, setStartISO] = useState("2000-01-01");
-  const [endISO, setEndISO] = useState(todayISO());
-
-  useEffect(() => {
-    fetch("http://127.0.0.1:5000/filters/options")
-      .then((r) => r.json())
-      .then((data) => {
-        const cleaned = Array.isArray(data.pscodes)
-          ? data.pscodes.map((p) =>
-            typeof p === "string" ? p.replace(/\.0+$/, "") : p
-          )
-          : [];
-        setOptions({
-          pscodes: cleaned,
-          screenresults: data.screenresults || [],
-        });
-      })
-      .catch(() => {
-        /* ignore */
-      });
-  }, []);
-
-  function monthPart(isoDateStr) {
-    return isoDateStr?.slice(0, 7) ?? "";
-  }
-
-  const qs = useMemo(() => {
-    const params = new URLSearchParams();
-    if (startISO) params.set("start", monthPart(startISO));
-    if (endISO) params.set("end", monthPart(endISO));
-    (pscodes || []).forEach((p) => params.append("pscode", p));
-    if (screenresult) params.set("screenresult", screenresult);
-    if (collections !== "any") params.set("collections", collections);
-    if (evicted !== "any") params.set("evicted", evicted);
-    return params.toString();
-  }, [startISO, endISO, pscodes, screenresult, collections, evicted]);
-
-  return {
-    options,
-    startISO,
-    endISO,
-    pscodes,
-    screenresult,
-    collections,
-    evicted,
-    setStartISO,
-    setEndISO,
-    setPscodes,
-    setScreenresult,
-    setCollections,
-    setEvicted,
-    queryString: qs,
-  };
-}
-
-/* =========================
-   PORTFOLIO VIEW
-   ========================= */
-export function PortfolioView() {
-  const filters = useFilters();
-
-  const [snapshot, setSnapshot] = useState(null);
-  const [series, setSeries] = useState([]);
-
-  // feature importance now loads separately, once, without blocking filters
-  const [topFeatures, setTopFeatures] = useState({
-    auc: null,
-    top_features: [],
-  });
-
-  const [openDropdown, setOpenDropdown] = useState(null);
-
-  // THIS IS NOW THE *INNER* CONTENT WRAPPER (not the scroll container)
-  const exportRef = useRef(null);
-
-  // Debounce the query string so rapid filter clicks don't spam fetches
-  const debouncedQS = useDebounced(filters.queryString, 300);
-
-  // Fetch KPIs (snapshot + timeseries) whenever debounced filters change
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [snapRes, tsRes] = await Promise.all([
-          fetch(`http://127.0.0.1:5000/kpis/snapshot?${debouncedQS}`),
-          fetch(`http://127.0.0.1:5000/kpis/timeseries?${debouncedQS}`),
-        ]);
-
-        const snapJson = snapRes.ok ? await snapRes.json() : null;
-        const tsJson = tsRes.ok ? await tsRes.json() : [];
-
-        if (!alive) return;
-        setSnapshot(snapJson);
-        setSeries(Array.isArray(tsJson) ? tsJson : []);
-      } catch (err) {
-        if (!alive) return;
-        console.error("Dashboard fetch error:", err);
-        setSnapshot(null);
-        setSeries([]);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [debouncedQS]);
-
-  // Fetch feature importance JUST ONCE on mount.
-  // This still calls the backend route, but it's no longer on every filter change.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const featRes = await fetch("http://127.0.0.1:5000/features/importance", {
-          method: "GET",
-          mode: "cors",
-          headers: { "Content-Type": "application/json" },
-        });
-        const featJson = featRes.ok
-          ? await featRes.json()
-          : { auc: null, top_features: [] };
-
-        if (!alive) return;
-        setTopFeatures(featJson);
-      } catch (err) {
-        if (!alive) return;
-        console.error("Feature importance fetch error:", err);
-        setTopFeatures({ auc: null, top_features: [] });
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // formatting helpers
-  const num = (n) => (n ?? 0).toLocaleString();
-  const pct = (p) => `${Math.round((p ?? 0) * 1000) / 10}%`;
-
-  const tooltipLabelFormatter = (labelVal) => {
-    if (!labelVal) return "";
-    const parts = String(labelVal).split("/");
-    if (parts.length < 2) return labelVal;
-    const [yyyy, mm] = parts;
-    const mmPadded = mm.padStart(2, "0");
-    return `${mmPadded}/${yyyy}`;
-  };
-
-  const yearTicks = useMemo(() => {
-    const seen = new Set();
-    const ticks = [];
-    for (const pt of series) {
-      const raw = pt.month; // "YYYY/MM"
-      if (!raw) continue;
-      const [yyyy] = String(raw).split("/");
-      if (!seen.has(yyyy)) {
-        seen.add(yyyy);
-        ticks.push(raw);
-      }
+    /* =========================
+       SMALL HOOK: DEBOUNCE A VALUE
+       ========================= */
+    function useDebounced(value, delayMs = 300) {
+      const [debounced, setDebounced] = useState(value);
+      useEffect(() => {
+        const t = setTimeout(() => setDebounced(value), delayMs);
+        return () => clearTimeout(t);
+      }, [value, delayMs]);
+      return debounced;
     }
-    return ticks;
-  }, [series]);
 
-  const xTickFormatterYearOnly = (val) => {
-    if (!val) return "";
-    const [yyyy] = String(val).split("/");
-    return yyyy;
-  };
+    /* =========================
+       INLINE DATE INPUT
+       ========================= */
+    function DateDropdown({ label, valueISO, onChangeISO }) {
+      return (
+        <div className="flex flex-col">
+          <div className="text-xs text-zinc-500 mb-1">{label}</div>
+          <input
+            type="date"
+            className="min-w-[11rem] rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            value={valueISO}
+            onChange={(e) => {
+              onChangeISO(e.target.value);
+            }}
+          />
+        </div>
+      );
+    }
 
-  /* ============================================================
-     EXPORT PNG
-     ============================================================ */
-  async function doExportPNG() {
-    if (!exportRef.current) return;
+    /* =========================
+       PROPERTY MULTISELECT
+       ========================= */
+    function PropertyMultiSelect({
+      options,
+      selected,
+      setSelected,
+      dropdownId,
+      openDropdown,
+      setOpenDropdown,
+    }) {
+      const wrapperRef = useRef(null);
+      const isOpen = openDropdown === dropdownId;
 
-    const clonedNode = cloneWithComputedStyles(exportRef.current);
-    clonedNode.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+      const allSelected =
+        selected.length === options.length && options.length > 0;
 
-    const width = Math.ceil(exportRef.current.scrollWidth);
-    const height = Math.ceil(exportRef.current.scrollHeight);
+      function toggleOne(code) {
+        if (selected.includes(code)) {
+          setSelected(selected.filter((c) => c !== code));
+        } else {
+          setSelected([...selected, code]);
+        }
+      }
 
-    const scale = 2;
+      function selectAll() {
+        setSelected(options.slice());
+      }
 
-    const serializedHTML = new XMLSerializer().serializeToString(clonedNode);
+      function clearAll() {
+        setSelected([]);
+      }
 
-    const svgString = `
-      <svg xmlns="http://www.w3.org/2000/svg"
-           width="${width * scale}"
-           height="${height * scale}"
-           viewBox="0 0 ${width} ${height}">
-        <foreignObject x="0" y="0" width="${width}" height="${height}">
-          ${serializedHTML}
-        </foreignObject>
-      </svg>
-    `.trim();
-
-    const svgBase64 = window.btoa(unescape(encodeURIComponent(svgString)));
-    const imgSrc = `data:image/svg+xml;base64,${svgBase64}`;
-
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-
-    img.onload = () => {
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = width * scale;
-        canvas.height = height * scale;
-
-        const ctx = canvas.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) {
-              console.error("Export PNG failed: canvas.toBlob() returned null");
-              return;
+      useEffect(() => {
+        function handleClickOutside(e) {
+          if (!wrapperRef.current) return;
+          if (!wrapperRef.current.contains(e.target)) {
+            if (openDropdown === dropdownId) {
+              setOpenDropdown(null);
             }
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `Portfolio_${filters.startISO}_${filters.endISO}.png`;
-            a.click();
-            URL.revokeObjectURL(url);
-          },
-          "image/png",
-          0.95
-        );
-      } catch (err) {
-        console.error("PNG export error:", err);
-      }
-    };
+          }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => document.removeEventListener("mousedown", handleClickOutside);
+      }, [openDropdown, dropdownId, setOpenDropdown]);
 
-    img.onerror = (e) => {
-      console.error("Could not render SVG to image", e);
-    };
+      let summary = "Properties";
+      if (selected.length === 1) summary = selected[0];
+      else if (allSelected) summary = "All";
+      else if (selected.length > 1) summary = `${selected.length} selected`;
 
-    img.src = imgSrc;
-  }
-
-  return (
-    // OUTER: scroll container for the live UI
-    <div className="w-full h-full flex flex-col py-2 overflow-auto scrollbar-hide bg-white">
-      {/* INNER: full natural-height content.
-          We export THIS. It is NOT scroll-clipped. */}
-      <div className="flex flex-col gap-4" ref={exportRef}>
-        {/* FILTER BAR */}
-        <div className="flex flex-wrap items-end gap-4 text-sm">
-          {/* Start Date */}
-          <DateDropdown
-            label="Start"
-            valueISO={filters.startISO}
-            onChangeISO={filters.setStartISO}
-          />
-
-          {/* End Date */}
-          <DateDropdown
-            label="End"
-            valueISO={filters.endISO}
-            onChangeISO={filters.setEndISO}
-          />
-
-          {/* Properties */}
-          <PropertyMultiSelect
-            options={filters.options.pscodes}
-            selected={filters.pscodes}
-            setSelected={filters.setPscodes}
-            dropdownId="props"
-            openDropdown={openDropdown}
-            setOpenDropdown={setOpenDropdown}
-          />
-
-          {/* Screen */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Screen</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.screenresult ?? ""}
-                onChange={(e) =>
-                  filters.setScreenresult(e.target.value || null)
-                }
-              >
-                <option value="">Any</option>
-                {filters.options.screenresults.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Collections */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Collections</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.collections}
-                onChange={(e) => filters.setCollections(e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="with">With Balance</option>
-                <option value="without">No Balance</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Evicted */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Evicted</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.evicted}
-                onChange={(e) => filters.setEvicted(e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="Yes">Yes</option>
-                <option value="No">No</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex-1" />
+      return (
+        <div className="flex flex-col relative" ref={wrapperRef}>
+          <div className="text-xs text-zinc-500 mb-1">Properties</div>
 
           <button
-            onClick={doExportPNG}
-            className="self-start px-4 py-2 rounded-xl border bg-zinc-900 text-white text-sm shadow-sm hover:opacity-90"
+            className="min-w-[10rem] flex items-center justify-between rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm hover:bg-zinc-50"
+            onClick={() => {
+              setOpenDropdown(isOpen ? null : dropdownId);
+            }}
+            type="button"
           >
-            Export PNG
+            <span className="truncate max-w-[8rem]">{summary}</span>
+            <span className="text-zinc-400 text-xs">▾</span>
           </button>
-        </div>
 
-        {/* DASH CONTENT */}
-        <div className="flex flex-col gap-4">
-          {/* KPI CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">Late-payment rate</div>
-              <div className="text-3xl font-semibold">
-                {snapshot ? pct(snapshot.pct_late_payers) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">NSF count</div>
-              <div className="text-3xl font-semibold">
-                {snapshot ? num(snapshot.nsf_count) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">Collections exposure</div>
-              <div className="text-3xl font-semibold">
-                ${snapshot ? num(snapshot.collections_exposure) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">$ delinquent</div>
-              <div className="text-3xl font-semibold">
-                ${snapshot ? num(snapshot.dollars_delinquent) : "--"}
-              </div>
-            </div>
-          </div>
-
-          {/* CHARTS */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Late-payment rate over time */}
-            <ChartCard title="Late-payment rate over time">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis
-                    tickFormatter={(v) => `${Math.round(v * 100)}%`}
-                  />
-                  <Tooltip
-                    labelFormatter={tooltipLabelFormatter}
-                    formatter={(v) =>
-                      typeof v === "number"
-                        ? `${Math.round(v * 1000) / 10}%`
-                        : v
-                    }
-                  />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="pct_late_payers"
-                    name="% late"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            {/* NSF count over time */}
-            <ChartCard title="NSF count over time">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis />
-                  <Tooltip labelFormatter={tooltipLabelFormatter} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="nsf_count"
-                    name="NSF"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            {/* Collections exposure over time */}
-            <ChartCard title="Collections exposure over time">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis />
-                  <Tooltip labelFormatter={tooltipLabelFormatter} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="collections_exposure"
-                    name="Collections"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            {/* $ delinquent over time */}
-            <ChartCard title="Delinquent over time ($)">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis />
-                  <Tooltip labelFormatter={tooltipLabelFormatter} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="dollars_delinquent"
-                    name="$ delinquent"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-          </div>
-
-          {/* FEATURE IMPORTANCE */}
-          <div className="rounded-2xl border p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-zinc-500">
-                  Primary Eviction Risk Drivers (tentative model)
-                </div>
-                <div className="text-2xl font-semibold">
-                  {topFeatures.auc != null
-                    ? `Top drivers (AUC ${Math.round(topFeatures.auc * 100) / 100
-                    })`
-                    : "Top drivers"}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {topFeatures.top_features?.slice(0, 6).map((f) => (
-                <div
-                  key={`${f.feature}`}
-                  className="flex items-center justify-between rounded-xl border px-3 py-2 text-sm shadow-sm"
+          {isOpen && (
+            <div
+              className="absolute z-50 mt-2 max-h-60 w-48 overflow-y-auto rounded-xl border border-zinc-300 bg-white text-sm shadow-xl p-1 space-y-1
+                         left-1/2 -translate-x-1/2 transform"
+            >
+              <div className="flex gap-2 justify-center text-center">
+                <button
+                  className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] hover:bg-zinc-50"
+                  onClick={selectAll}
+                  type="button"
                 >
-                  <div className="text-sm">{f.feature}</div>
-                  <div className="text-sm font-semibold">
-                    {Math.round(f.importance * 1000) / 10}%
-                  </div>
-                </div>
-              ))}
+                  Select all
+                </button>
+                <button
+                  className="flex-1 rounded-lg border border-zinc-300 px-2 py-1 text-[11px] hover:bg-zinc-50"
+                  onClick={clearAll}
+                  type="button"
+                >
+                  Clear
+                </button>
+              </div>
 
-              {(!topFeatures.top_features ||
-                topFeatures.top_features.length === 0) && (
-                  <div className="text-zinc-500 text-sm">
-                    Not enough data to compute predictors.
-                  </div>
-                )}
+              <div className="border-t border-zinc-200" />
+
+              <div className="max-h-40 overflow-y-auto space-y-[2px] pr-1 flex flex-col items-center">
+                {options.map((code) => (
+                  <label
+                    key={code}
+                    className="flex items-center gap-2 text-[11px] cursor-pointer hover:bg-zinc-100 rounded-lg px-1 py-[1px] w-full justify-center"
+                  >
+                    <input
+                      type="checkbox"
+                      className="cursor-pointer"
+                      checked={selected.includes(code)}
+                      onChange={() => toggleOne(code)}
+                    />
+                    <span className="truncate">{code}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    /* =========================
+       MAIN SHELL (header/nav chrome)
+       ========================= */
+    export default function UserView({ user, onSwapView, onLogout }) {
+      const [selectedTenants, setSelectedTenants] = useState([]);
+      const [activeView, setActiveView] = useState("portfolio");
+      return (
+        <div className="fixed w-screen h-screen bg-zinc-700 flex flex-col">
+          <div className="w-full">
+            <Header user={user} onSwapView={onSwapView} onLogout={onLogout} />
+          </div>
+
+          <div className="flex-grow flex justify-center items-center p-8 min-h-0">
+            <div className="w-[98%] h-full bg-white rounded-2xl flex flex-col shadow-xl">
+              <div className="flex-grow flex justify-center items-stretch overflow-hidden p-4">
+                {activeView === "portfolio" && <PortfolioView />}
+                {activeView === "property" && <PropertyView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
+                {activeView === "at-risk" && <AtRiskView selectedTenants={selectedTenants} setSelectedTenants={setSelectedTenants} />}
+              </div>
+              <div className="w-full">
+                <UserNavigation
+                  activeView={activeView}
+                  setActiveView={setActiveView}
+                />
+              </div>
             </div>
           </div>
         </div>
-      </div>
-    </div> // end outer scroll container
-  );
-}
+      );
+    }
 
-function ChartCard({ title, children }) {
-  return (
-    <div className="rounded-2xl border p-4 shadow-sm">
-      <div className="text-sm text-zinc-500">{title}</div>
-      <div className="mt-2" style={{ height: 260 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
+    /* =========================
+       FILTER STATE HOOK
+       ========================= */
+    function useFilters() {
+      const [options, setOptions] = useState({ pscodes: [], screenresults: [] });
 
-const PROPERTY_GROUPINGS = [
-  {
-    name: "Apartments at The Sound",
-    image: "https://www.apartmentsatthesound.com/wp-content/uploads/2025/05/HA_Twilight_Harpers-Court-at-Harpers-at-The-Sound_July2020-1-1024x768.jpg",
-    properties: [
-      { propertyId: 'DD537', propertyName: 'Bleecker Street', propertyCode: '1404' },
-      { propertyId: 'DD541', propertyName: 'Byron Bay', propertyCode: '1406' },
-      { propertyId: 'DD539', propertyName: 'Harpers', propertyCode: '1405' },
-      { propertyId: 'BR704', propertyName: "Hasting's End", propertyCode: '1407' },
-      { propertyId: 'DD544', propertyName: 'Olympus', propertyCode: '1408' },
-      { propertyId: 'DD546', propertyName: 'Rombauer', propertyCode: '1409' },
-      { propertyId: 'DD533', propertyName: 'The Wharf', propertyCode: '1403' },
-      { propertyId: 'DD478', propertyName: 'The Flats', propertyCode: '1411' },
-    ]
-  },
+      const [pscodes, setPscodes] = useState([]);
+      const [screenresult, setScreenresult] = useState(null);
+      const [collections, setCollections] = useState("any");
+      const [evicted, setEvicted] = useState("any");
 
-  {
-    name: "Beacon Square",
-    image: "https://www.thebeaconapartments.com/wp-content/uploads/2025/04/BE_Pool-11-1024x683.jpg",
-    properties: [
-      { propertyId: 'CS574', propertyName: 'The Beacon (North)', propertyCode: '1501' },
-      { propertyId: 'CS575', propertyName: 'The Beacon (South)', propertyCode: '1502' },
-    ]
-  },
+      const [startISO, setStartISO] = useState("2000-01-01");
+      const [endISO, setEndISO] = useState(todayISO());
 
-  {
-    name: "Grapevine Mills Crossing",
-    image: "https://www.wallisandbaker.com/wp-content/uploads/2025/03/Wallis-Baker-Pool-Shot-July-2021-1024x683.png",
-    properties: [
-      { propertyId: 'DD522', propertyName: 'Wallis & Baker', propertyCode: '1601' },
-    ]
-  },
+      useEffect(() => {
+        fetch("http://127.0.0.1:5000/filters/options")
+          .then((r) => r.json())
+          .then((data) => {
+            const cleaned = Array.isArray(data.pscodes)
+              ? data.pscodes.map((p) =>
+                typeof p === "string" ? p.replace(/\.0+$/, "") : p
+              )
+              : [];
+            setOptions({
+              pscodes: cleaned,
+              screenresults: data.screenresults || [],
+            });
+          })
+          .catch(() => {
+            /* ignore */
+          });
+      }, []);
 
-  {
-    name: "Sage Hill",
-    image: "https://www.sagehillapts.com/wp-content/uploads/2025/01/SH_Pool-at-The-Stone-House-2-1024x683.jpg",
-    properties: [
-      { propertyId: 'DD473', propertyName: 'Sage Hill', propertyCode: '1410' },
-    ]
-  },
+      function monthPart(isoDateStr) {
+        return isoDateStr?.slice(0, 7) ?? "";
+      }
 
-  {
-    name: "Sloan Corners",
-    image: "https://media.billingsleyco.com/m/41db5d39117b7da4/original/Sloan_Corners_Fairview_Allen_Retail.jpg",
-    properties: [
-      { propertyId: 'CD392', propertyName: 'Sloane Street', propertyCode: '1301' },
-      { propertyId: 'CD393', propertyName: 'Sloane Street (East)', propertyCode: '1302' },
-      { properyId: null, propertyName: 'Hartwood', propertyCode: null }
-    ]
-  },
+      const qs = useMemo(() => {
+        const params = new URLSearchParams();
+        if (startISO) params.set("start", monthPart(startISO));
+        if (endISO) params.set("end", monthPart(endISO));
+        (pscodes || []).forEach((p) => params.append("pscode", p));
+        if (screenresult) params.set("screenresult", screenresult);
+        if (collections !== "any") params.set("collections", collections);
+        if (evicted !== "any") params.set("evicted", evicted);
+        return params.toString();
+      }, [startISO, endISO, pscodes, screenresult, collections, evicted]);
 
-  {
-    name: "The Boat House",
-    image: "https://irp.cdn-website.com/d78e83d1/dms3rep/multi/2875-painted-lake-circle-the-colony-tx-High-Res-57.jpg",
-    properties: [
-      { propertyId: 'DD515', propertyName: 'The Boat House', propertyCode: '1101' },
-    ]
-  },
+      return {
+        options,
+        startISO,
+        endISO,
+        pscodes,
+        screenresult,
+        collections,
+        evicted,
+        setStartISO,
+        setEndISO,
+        setPscodes,
+        setScreenresult,
+        setCollections,
+        setEvicted,
+        queryString: qs,
+      };
+    }
 
-  {
-    name: "The Chloe",
-    image: "https://thechloeapartments.com/wp-content/uploads/2025/04/The-Chloe-The-Colony-TX-Indochine-Clubroom-18-scaled.jpg",
-    properties: [
-      { propertyId: 'EH954', propertyName: 'The Chloe', propertyCode: '1104' },
-    ]
-  },
+    /* =========================
+       PORTFOLIO VIEW
+       ========================= */
+    export function PortfolioView() {
+      const filters = useFilters();
 
-  {
-    name: "The Hudson",
-    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3075-painted-lake-circle-the-colony-tx-High-Res-8-scaled.jpg",
-    properties: [
-      { propertyId: 'DD524', propertyName: 'The Hudson (A)', propertyCode: '1102' },
-      { propertyId: 'DD530', propertyName: 'The Hudson (B)', propertyCode: '1103' },
-    ]
-  },
+      const [snapshot, setSnapshot] = useState(null);
+      const [series, setSeries] = useState([]);
 
-  {
-    name: "The Landing",
-    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/4216-sloane-street-carrollton-tx-High-Res-9-scaled.jpg",
-    properties: [
-      { propertyId: 'BK659', propertyName: 'Wylder Square', propertyCode: '1303' },
-    ]
-  },
+      // feature importance now loads separately, once, without blocking filters
+      const [topFeatures, setTopFeatures] = useState({
+        auc: null,
+        top_features: [],
+      });
 
-  {
-    name: "Thousand Oaks",
-    image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/6760-windhaven-pkwy-the-colony-tx-High-Res-13-scaled.jpg",
-    properties: [
-      { propertyId: 'DD494', propertyName: 'Austin Boulevard', propertyCode: '1005' },
-      { propertyId: 'DD483', propertyName: 'Austin Gardens', propertyCode: '1003' },
-      { propertyId: 'DD486', propertyName: 'Austin Parks', propertyCode: '1004' },
-      { propertyId: 'DD492', propertyName: 'Austin Square', propertyCode: '1004c' },
-      { propertyId: 'DD500', propertyName: "Stag's Leap", propertyCode: '1007' },
-      { propertyId: 'DD506', propertyName: 'The Charles', propertyCode: '1008' },
-    ]
-  },
-]
+      const [openDropdown, setOpenDropdown] = useState(null);
 
-function PropertyList({ onPropertySelect }) {
-  const [hoveredPropertyGrouping, setHoveredPropertyGrouping] = useState(null);
+      // THIS IS NOW THE *INNER* CONTENT WRAPPER (not the scroll container)
+      const exportRef = useRef(null);
 
-  return (
-    <div className="w-full h-full flex justify-center items-start rounded-lg overflow-auto scrollbar-hide">
-      <div className="p-8">
-        <div className="grid grid-cols-4 gap-16">
-          {PROPERTY_GROUPINGS.map((propertyGroup, idx) => {
-            const propertyLength = propertyGroup.properties.length > 1;
+      // Debounce the query string so rapid filter clicks don't spam fetches
+      const debouncedQS = useDebounced(filters.queryString, 300);
 
-            return (
-              <div
-                key={idx}
-                onMouseEnter={() => propertyLength && setHoveredPropertyGrouping(idx)}
-                onMouseLeave={() => setHoveredPropertyGrouping(null)}
-                onClick={() => !propertyLength && onPropertySelect(propertyGroup.properties[0])}
-                className="w-[420px] bg-white rounded-lg shadow-md cursor-pointer relative"
+      // Fetch KPIs (snapshot + timeseries) whenever debounced filters change
+      useEffect(() => {
+        let alive = true;
+        (async () => {
+          try {
+            const [snapRes, tsRes] = await Promise.all([
+              fetch(`http://127.0.0.1:5000/kpis/snapshot?${debouncedQS}`),
+              fetch(`http://127.0.0.1:5000/kpis/timeseries?${debouncedQS}`),
+            ]);
+
+            const snapJson = snapRes.ok ? await snapRes.json() : null;
+            const tsJson = tsRes.ok ? await tsRes.json() : [];
+
+            if (!alive) return;
+            setSnapshot(snapJson);
+            setSeries(Array.isArray(tsJson) ? tsJson : []);
+          } catch (err) {
+            if (!alive) return;
+            console.error("Dashboard fetch error:", err);
+            setSnapshot(null);
+            setSeries([]);
+          }
+        })();
+        return () => {
+          alive = false;
+        };
+      }, [debouncedQS]);
+
+      // Fetch feature importance JUST ONCE on mount.
+      // This still calls the backend route, but it's no longer on every filter change.
+      useEffect(() => {
+        let alive = true;
+        (async () => {
+          try {
+            const featRes = await fetch("http://127.0.0.1:5000/features/importance", {
+              method: "GET",
+              mode: "cors",
+              headers: { "Content-Type": "application/json" },
+            });
+            const featJson = featRes.ok
+              ? await featRes.json()
+              : { auc: null, top_features: [] };
+
+            if (!alive) return;
+            setTopFeatures(featJson);
+          } catch (err) {
+            if (!alive) return;
+            console.error("Feature importance fetch error:", err);
+            setTopFeatures({ auc: null, top_features: [] });
+          }
+        })();
+        return () => {
+          alive = false;
+        };
+      }, []);
+
+      // formatting helpers
+      const num = (n) => (n ?? 0).toLocaleString();
+      const pct = (p) => `${Math.round((p ?? 0) * 1000) / 10}%`;
+
+      const tooltipLabelFormatter = (labelVal) => {
+        if (!labelVal) return "";
+        const parts = String(labelVal).split("/");
+        if (parts.length < 2) return labelVal;
+        const [yyyy, mm] = parts;
+        const mmPadded = mm.padStart(2, "0");
+        return `${mmPadded}/${yyyy}`;
+      };
+
+      const yearTicks = useMemo(() => {
+        const seen = new Set();
+        const ticks = [];
+        for (const pt of series) {
+          const raw = pt.month; // "YYYY/MM"
+          if (!raw) continue;
+          const [yyyy] = String(raw).split("/");
+          if (!seen.has(yyyy)) {
+            seen.add(yyyy);
+            ticks.push(raw);
+          }
+        }
+        return ticks;
+      }, [series]);
+
+      const xTickFormatterYearOnly = (val) => {
+        if (!val) return "";
+        const [yyyy] = String(val).split("/");
+        return yyyy;
+      };
+
+      /* ============================================================
+         EXPORT PNG
+         ============================================================ */
+      async function doExportPNG() {
+        if (!exportRef.current) return;
+
+        const clonedNode = cloneWithComputedStyles(exportRef.current);
+        clonedNode.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
+
+        const width = Math.ceil(exportRef.current.scrollWidth);
+        const height = Math.ceil(exportRef.current.scrollHeight);
+
+        const scale = 2;
+
+        const serializedHTML = new XMLSerializer().serializeToString(clonedNode);
+
+        const svgString = `
+          <svg xmlns="http://www.w3.org/2000/svg"
+               width="${width * scale}"
+               height="${height * scale}"
+               viewBox="0 0 ${width} ${height}">
+            <foreignObject x="0" y="0" width="${width}" height="${height}">
+              ${serializedHTML}
+            </foreignObject>
+          </svg>
+        `.trim();
+
+        const svgBase64 = window.btoa(unescape(encodeURIComponent(svgString)));
+        const imgSrc = `data:image/svg+xml;base64,${svgBase64}`;
+
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = width * scale;
+            canvas.height = height * scale;
+
+            const ctx = canvas.getContext("2d");
+            ctx.fillStyle = "#ffffff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            canvas.toBlob(
+              (blob) => {
+                if (!blob) {
+                  console.error("Export PNG failed: canvas.toBlob() returned null");
+                  return;
+                }
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `Portfolio_${filters.startISO}_${filters.endISO}.png`;
+                a.click();
+                URL.revokeObjectURL(url);
+              },
+              "image/png",
+              0.95
+            );
+          } catch (err) {
+            console.error("PNG export error:", err);
+          }
+        };
+
+        img.onerror = (e) => {
+          console.error("Could not render SVG to image", e);
+        };
+
+        img.src = imgSrc;
+      }
+
+      return (
+        // OUTER: scroll container for the live UI
+        <div className="w-full h-full flex flex-col py-2 overflow-auto scrollbar-hide bg-white">
+          {/* INNER: full natural-height content.
+              We export THIS. It is NOT scroll-clipped. */}
+          <div className="flex flex-col gap-4" ref={exportRef}>
+            {/* FILTER BAR */}
+            <div className="flex flex-wrap items-end gap-4 text-sm">
+              {/* Start Date */}
+              <DateDropdown
+                label="Start"
+                valueISO={filters.startISO}
+                onChangeISO={filters.setStartISO}
+              />
+
+              {/* End Date */}
+              <DateDropdown
+                label="End"
+                valueISO={filters.endISO}
+                onChangeISO={filters.setEndISO}
+              />
+
+              {/* Properties */}
+              <PropertyMultiSelect
+                options={filters.options.pscodes}
+                selected={filters.pscodes}
+                setSelected={filters.setPscodes}
+                dropdownId="props"
+                openDropdown={openDropdown}
+                setOpenDropdown={setOpenDropdown}
+              />
+
+              {/* Screen */}
+              <div className="flex flex-col">
+                <div className="text-xs text-zinc-500 mb-1">Screen</div>
+                <div className="relative">
+                  <select
+                    className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+                    value={filters.screenresult ?? ""}
+                    onChange={(e) =>
+                      filters.setScreenresult(e.target.value || null)
+                    }
+                  >
+                    <option value="">Any</option>
+                    {filters.options.screenresults.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Collections */}
+              <div className="flex flex-col">
+                <div className="text-xs text-zinc-500 mb-1">Collections</div>
+                <div className="relative">
+                  <select
+                    className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+                    value={filters.collections}
+                    onChange={(e) => filters.setCollections(e.target.value)}
+                  >
+                    <option value="any">Any</option>
+                    <option value="with">With Balance</option>
+                    <option value="without">No Balance</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Evicted */}
+              <div className="flex flex-col">
+                <div className="text-xs text-zinc-500 mb-1">Evicted</div>
+                <div className="relative">
+                  <select
+                    className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+                    value={filters.evicted}
+                    onChange={(e) => filters.setEvicted(e.target.value)}
+                  >
+                    <option value="any">Any</option>
+                    <option value="Yes">Yes</option>
+                    <option value="No">No</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex-1" />
+
+              <button
+                onClick={doExportPNG}
+                className="self-start px-4 py-2 rounded-xl border bg-zinc-900 text-white text-sm shadow-sm hover:opacity-90"
               >
-                <div className="h-60 bg-zinc-200 flex items-center justify-center overflow-hidden rounded-tl-lg rounded-tr-lg">
-                  {propertyGroup.image ? (
-                    <img
-                      src={propertyGroup.image}
-                      alt={propertyGroup.name}
-                      className="w-full h-full object-cover object-center transform-gpu transition-all duration-500 ease-in-out hover:scale-105 overflow-hidden"
-                    />
-                  ) : (
-                    <span className="text-gray-400">Image</span>
-                  )}
-                </div>
+                Export PNG
+              </button>
+            </div>
 
-                <div className="p-6">
-                  <h2 className="text-xl font-light italic text-[#0A1A33]">
-                    {propertyGroup.name}
-                  </h2>
+            {/* DASH CONTENT */}
+            <div className="flex flex-col gap-4">
+              {/* KPI CARDS */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="rounded-2xl border p-4 shadow-sm">
+                  <div className="text-sm text-zinc-500">Late-payment rate</div>
+                  <div className="text-3xl font-semibold">
+                    {snapshot ? pct(snapshot.pct_late_payers) : "--"}
+                  </div>
                 </div>
+                <div className="rounded-2xl border p-4 shadow-sm">
+                  <div className="text-sm text-zinc-500">NSF count</div>
+                  <div className="text-3xl font-semibold">
+                    {snapshot ? num(snapshot.nsf_count) : "--"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4 shadow-sm">
+                  <div className="text-sm text-zinc-500">Collections exposure</div>
+                  <div className="text-3xl font-semibold">
+                    ${snapshot ? num(snapshot.collections_exposure) : "--"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4 shadow-sm">
+                  <div className="text-sm text-zinc-500">$ delinquent</div>
+                  <div className="text-3xl font-semibold">
+                    ${snapshot ? num(snapshot.dollars_delinquent) : "--"}
+                  </div>
+                </div>
+              </div>
 
-                {/* Sub-property selection. Only have groups when propertyLength > 1 */}
-                {propertyLength && hoveredPropertyGrouping === idx && (
-                  <div style={{ top: '-1px', left: '-1px', right: '-1px', bottom: '-1px' }} className="absolute rounded-lg bg-zinc-200 flex items-start justify-start p-6">
-                    <div className="w-full grid grid-cols-2 gap-3">
-                      {propertyGroup.properties.map((property) => (
-                        <button
-                          key={property.propertyId}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onPropertySelect(property);
-                          }}
-                          className="px-5 py-4 bg-white rounded-lg text-lg font-medium text-[#0A1A33] hover:bg-[#0A1A33] hover:text-white hover:border-[#0A1A33] transition-all duration-200 shadow-md"
-                        >
-                          {property.propertyName}
-                        </button>
-                      ))}
+              {/* CHARTS */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* Late-payment rate over time */}
+                <ChartCard title="Late-payment rate over time">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={series}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="month"
+                        ticks={yearTicks}
+                        tickFormatter={xTickFormatterYearOnly}
+                      />
+                      <YAxis
+                        tickFormatter={(v) => `${Math.round(v * 100)}%`}
+                      />
+                      <Tooltip
+                        labelFormatter={tooltipLabelFormatter}
+                        formatter={(v) =>
+                          typeof v === "number"
+                            ? `${Math.round(v * 1000) / 10}%`
+                            : v
+                        }
+                      />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="pct_late_payers"
+                        name="% late"
+                        dot={false}
+                        stroke="#0A1A33"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                {/* NSF count over time */}
+                <ChartCard title="NSF count over time">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={series}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="month"
+                        ticks={yearTicks}
+                        tickFormatter={xTickFormatterYearOnly}
+                      />
+                      <YAxis />
+                      <Tooltip labelFormatter={tooltipLabelFormatter} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="nsf_count"
+                        name="NSF"
+                        dot={false}
+                        stroke="#0A1A33"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                {/* Collections exposure over time */}
+                <ChartCard title="Collections exposure over time">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={series}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="month"
+                        ticks={yearTicks}
+                        tickFormatter={xTickFormatterYearOnly}
+                      />
+                      <YAxis />
+                      <Tooltip labelFormatter={tooltipLabelFormatter} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="collections_exposure"
+                        name="Collections"
+                        dot={false}
+                        stroke="#0A1A33"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                {/* $ delinquent over time */}
+                <ChartCard title="Delinquent over time ($)">
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={series}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="month"
+                        ticks={yearTicks}
+                        tickFormatter={xTickFormatterYearOnly}
+                      />
+                      <YAxis />
+                      <Tooltip labelFormatter={tooltipLabelFormatter} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="dollars_delinquent"
+                        name="$ delinquent"
+                        dot={false}
+                        stroke="#0A1A33"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+              </div>
+
+              {/* FEATURE IMPORTANCE */}
+              <div className="rounded-2xl border p-4 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm text-zinc-500">
+                      Primary Eviction Risk Drivers (tentative model)
+                    </div>
+                    <div className="text-2xl font-semibold">
+                      {topFeatures.auc != null
+                        ? `Top drivers (AUC ${Math.round(topFeatures.auc * 100) / 100
+                        })`
+                        : "Top drivers"}
                     </div>
                   </div>
-                )}
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                  {topFeatures.top_features?.slice(0, 6).map((f) => (
+                    <div
+                      key={`${f.feature}`}
+                      className="flex items-center justify-between rounded-xl border px-3 py-2 text-sm shadow-sm"
+                    >
+                      <div className="text-sm">{f.feature}</div>
+                      <div className="text-sm font-semibold">
+                        {Math.round(f.importance * 1000) / 10}%
+                      </div>
+                    </div>
+                  ))}
+
+                  {(!topFeatures.top_features ||
+                    topFeatures.top_features.length === 0) && (
+                      <div className="text-zinc-500 text-sm">
+                        Not enough data to compute predictors.
+                      </div>
+                    )}
+                </div>
               </div>
-            );
-          })}
+            </div>
+          </div>
+        </div> // end outer scroll container
+      );
+    }
+
+    function ChartCard({ title, children }) {
+      return (
+        <div className="rounded-2xl border p-4 shadow-sm">
+          <div className="text-sm text-zinc-500">{title}</div>
+          <div className="mt-2" style={{ height: 260 }}>
+            {children}
+          </div>
         </div>
-      </div>
-    </div>
-  );
-}
+      );
+    }
 
-// Map UI-friendly names to actual tenant object keys
-const fieldMap = {
-  "Risk Score": "riskscore",
-  "Total Debt": "totdebt",
-  "Rent-to-Income": "rentincratio",
-  "Debt-to-Income": "debtincratio",
-};
+    const PROPERTY_GROUPINGS = [
+      {
+        name: "Apartments at The Sound",
+        image: "https://www.apartmentsatthesound.com/wp-content/uploads/2025/05/HA_Twilight_Harpers-Court-at-Harpers-at-The-Sound_July2020-1-1024x768.jpg",
+        properties: [
+          { propertyId: 'DD537', propertyName: 'Bleecker Street', propertyCode: '1404' },
+          { propertyId: 'DD541', propertyName: 'Byron Bay', propertyCode: '1406' },
+          { propertyId: 'DD539', propertyName: 'Harpers', propertyCode: '1405' },
+          { propertyId: 'BR704', propertyName: "Hasting's End", propertyCode: '1407' },
+          { propertyId: 'DD544', propertyName: 'Olympus', propertyCode: '1408' },
+          { propertyId: 'DD546', propertyName: 'Rombauer', propertyCode: '1409' },
+          { propertyId: 'DD533', propertyName: 'The Wharf', propertyCode: '1403' },
+          { propertyId: 'DD478', propertyName: 'The Flats', propertyCode: '1411' },
+        ]
+      },
 
-// NEW: shared helpers for coloring numeric risk scores 0–100
-function riskScoreClasses(score) {
-  const numeric = Number(score);
-  if (!Number.isFinite(numeric)) {
-    return "bg-zinc-100 text-zinc-600";
-  }
-  if (numeric < 30) return "bg-emerald-100 text-emerald-800";
-  if (numeric < 60) return "bg-amber-100 text-amber-800";
-  if (numeric < 80) return "bg-orange-100 text-orange-800";
-  return "bg-red-100 text-red-800";
-}
+      {
+        name: "Beacon Square",
+        image: "https://www.thebeaconapartments.com/wp-content/uploads/2025/04/BE_Pool-11-1024x683.jpg",
+        properties: [
+          { propertyId: 'CS574', propertyName: 'The Beacon (North)', propertyCode: '1501' },
+          { propertyId: 'CS575', propertyName: 'The Beacon (South)', propertyCode: '1502' },
+        ]
+      },
 
-function formatRiskScore(score) {
-  const numeric = Number(score);
-  if (!Number.isFinite(numeric)) return "–";
-  return numeric.toFixed(1);
-}
+      {
+        name: "Grapevine Mills Crossing",
+        image: "https://www.wallisandbaker.com/wp-content/uploads/2025/03/Wallis-Baker-Pool-Shot-July-2021-1024x683.png",
+        properties: [
+          { propertyId: 'DD522', propertyName: 'Wallis & Baker', propertyCode: '1601' },
+        ]
+      },
 
-function PropertyDetail({
+      {
+        name: "Sage Hill",
+        image: "https://www.sagehillapts.com/wp-content/uploads/2025/01/SH_Pool-at-The-Stone-House-2-1024x683.jpg",
+        properties: [
+          { propertyId: 'DD473', propertyName: 'Sage Hill', propertyCode: '1410' },
+        ]
+      },
+
+      {
+        name: "Sloan Corners",
+        image: "https://media.billingsleyco.com/m/41db5d39117b7da4/original/Sloan_Corners_Fairview_Allen_Retail.jpg",
+        properties: [
+          { propertyId: 'CD392', propertyName: 'Sloane Street', propertyCode: '1301' },
+          { propertyId: 'CD393', propertyName: 'Sloane Street (East)', propertyCode: '1302' },
+          { properyId: null, propertyName: 'Hartwood', propertyCode: null }
+        ]
+      },
+
+      {
+        name: "The Boat House",
+        image: "https://irp.cdn-website.com/d78e83d1/dms3rep/multi/2875-painted-lake-circle-the-colony-tx-High-Res-57.jpg",
+        properties: [
+          { propertyId: 'DD515', propertyName: 'The Boat House', propertyCode: '1101' },
+        ]
+      },
+
+      {
+        name: "The Chloe",
+        image: "https://thechloeapartments.com/wp-content/uploads/2025/04/The-Chloe-The-Colony-TX-Indochine-Clubroom-18-scaled.jpg",
+        properties: [
+          { propertyId: 'EH954', propertyName: 'The Chloe', propertyCode: '1104' },
+        ]
+      },
+
+      {
+        name: "The Hudson",
+        image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/3075-painted-lake-circle-the-colony-tx-High-Res-8-scaled.jpg",
+        properties: [
+          { propertyId: 'DD524', propertyName: 'The Hudson (A)', propertyCode: '1102' },
+          { propertyId: 'DD530', propertyName: 'The Hudson (B)', propertyCode: '1103' },
+        ]
+      },
+
+      {
+        name: "The Landing",
+        image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/4216-sloane-street-carrollton-tx-High-Res-9-scaled.jpg",
+        properties: [
+          { propertyId: 'BK659', propertyName: 'Wylder Square', propertyCode: '1303' },
+        ]
+      },
+
+      {
+        name: "Thousand Oaks",
+        image: "https://wwwbillingsley.wpengine.com/wp-content/uploads/2022/02/6760-windhaven-pkwy-the-colony-tx-High-Res-13-scaled.jpg",
+        properties: [
+          { propertyId: 'DD494', propertyName: 'Austin Boulevard', propertyCode: '1005' },
+          { propertyId: 'DD483', propertyName: 'Austin Gardens', propertyCode: '1003' },
+          { propertyId: 'DD486', propertyName: 'Austin Parks', propertyCode: '1004' },
+          { propertyId: 'DD492', propertyName: 'Austin Square', propertyCode: '1004c' },
+          { propertyId: 'DD500', propertyName: "Stag's Leap", propertyCode: '1007' },
+          { propertyId: 'DD506', propertyName: 'The Charles', propertyCode: '1008' },
+        ]
+      },
+    ]
+
+    function PropertyList({ onPropertySelect }) {
+      const [hoveredPropertyGrouping, setHoveredPropertyGrouping] = useState(null);
+
+      return (
+        <div className="w-full h-full flex justify-center items-start rounded-lg overflow-auto scrollbar-hide">
+          <div className="p-8">
+            <div className="grid grid-cols-4 gap-16">
+              {PROPERTY_GROUPINGS.map((propertyGroup, idx) => {
+                const propertyLength = propertyGroup.properties.length > 1;
+
+                return (
+                  <div
+                    key={idx}
+                    onMouseEnter={() => propertyLength && setHoveredPropertyGrouping(idx)}
+                    onMouseLeave={() => setHoveredPropertyGrouping(null)}
+                    onClick={() => !propertyLength && onPropertySelect(propertyGroup.properties[0])}
+                    className="w-[420px] bg-white rounded-lg shadow-md cursor-pointer relative"
+                  >
+                    <div className="h-60 bg-zinc-200 flex items-center justify-center overflow-hidden rounded-tl-lg rounded-tr-lg">
+                      {propertyGroup.image ? (
+                        <img
+                          src={propertyGroup.image}
+                          alt={propertyGroup.name}
+                          className="w-full h-full object-cover object-center transform-gpu transition-all duration-500 ease-in-out hover:scale-105 overflow-hidden"
+                        />
+                      ) : (
+                        <span className="text-gray-400">Image</span>
+                      )}
+                    </div>
+
+                    <div className="p-6">
+                      <h2 className="text-xl font-light italic text-[#0A1A33]">
+                        {propertyGroup.name}
+                      </h2>
+                    </div>
+
+                    {/* Sub-property selection. Only have groups when propertyLength > 1 */}
+                    {propertyLength && hoveredPropertyGrouping === idx && (
+                      <div style={{ top: '-1px', left: '-1px', right: '-1px', bottom: '-1px' }} className="absolute rounded-lg bg-zinc-200 flex items-start justify-start p-6">
+                        <div className="w-full grid grid-cols-2 gap-3">
+                          {propertyGroup.properties.map((property) => (
+                            <button
+                              key={property.propertyId}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onPropertySelect(property);
+                              }}
+                              className="px-5 py-4 bg-white rounded-lg text-lg font-medium text-[#0A1A33] hover:bg-[#0A1A33] hover:text-white hover:border-[#0A1A33] transition-all duration-200 shadow-md"
+                            >
+                              {property.propertyName}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // Map UI-friendly names to actual tenant object keys
+    const fieldMap = {
+      "Risk Score": "riskscore",
+      "Total Debt": "totdebt",
+      "Rent-to-Income": "rentincratio",
+      "Debt-to-Income": "debtincratio",
+    };
+
+    // NEW: shared helpers for coloring numeric risk scores 0–100
+    function riskScoreClasses(score) {
+      const numeric = Number(score);
+      if (!Number.isFinite(numeric)) {
+        return "bg-zinc-100 text-zinc-600";
+      }
+      if (numeric < 30) return "bg-emerald-100 text-emerald-800";
+      if (numeric < 60) return "bg-amber-100 text-amber-800";
+      if (numeric < 80) return "bg-orange-100 text-orange-800";
+      return "bg-red-100 text-red-800";
+    }
+
+    function formatRiskScore(score) {
+      const numeric = Number(score);
+      if (!Number.isFinite(numeric)) return "–";
+      return numeric.toFixed(1);
+    }
+
+    function PropertyDetail({
   property,
   onBack,
   screeningTenantData,
@@ -981,8 +981,7 @@ function PropertyDetail({
 }) {
   // Two underlying datasets keyed by propertyCode
   const tenantsScreening = screeningTenantData[property.propertyCode] || [];
-  const tenantsTransaction =
-    transactionTenantData[property.propertyCode] || [];
+  const tenantsTransaction = transactionTenantData[property.propertyCode] || [];
 
   // Which model view are we in?  "screening" | "transactions"
   const [viewMode, setViewMode] = useState("screening");
@@ -992,8 +991,11 @@ function PropertyDetail({
   const [userInput, setUserInput] = useState("");
   const [selectedFilter, setSelectedFilter] = useState("Risk Score");
   const [selectedSign, setSelectedSign] = useState("Greater");
+
+  // Quick search (top of table)
   const [tenantSearch, setTenantSearch] = useState("");
   const [unitSearch, setUnitSearch] = useState("");
+
   const [filteredTenants, setFilteredTenants] = useState(null);
 
   useEffect(() => {
@@ -1028,8 +1030,13 @@ function PropertyDetail({
     const valueStr = String(userInput ?? "").trim();
     const valNum = Number(valueStr);
 
+    const hasNumericFilter =
+      fieldKey && valueStr !== "" && Number.isFinite(valNum);
+    const hasTenantFilter = tenantSearch.trim().length > 0;
+    const hasUnitFilter = unitSearch.trim().length > 0;
+
     // Numeric field filter
-    if (fieldKey && valueStr !== "" && Number.isFinite(valNum)) {
+    if (hasNumericFilter) {
       filtered = filtered.filter((t) => {
         const v = t[fieldKey];
         if (v == null) return false;
@@ -1047,7 +1054,7 @@ function PropertyDetail({
     }
 
     // Tenant code filter
-    if (tenantSearch.trim()) {
+    if (hasTenantFilter) {
       const search = tenantSearch.toLowerCase();
       filtered = filtered.filter((t) => {
         const code = (t.tscode || "").toString().toLowerCase();
@@ -1056,7 +1063,7 @@ function PropertyDetail({
     }
 
     // Unit code filter
-    if (unitSearch.trim()) {
+    if (hasUnitFilter) {
       const search = unitSearch.toLowerCase();
       filtered = filtered.filter((t) => {
         const code = (t.uscode || "").toString().toLowerCase();
@@ -1065,12 +1072,7 @@ function PropertyDetail({
     }
 
     // If nothing is actually filtering, clear instead of keeping a copy
-    if (
-      !fieldKey &&
-      valueStr === "" &&
-      !tenantSearch.trim() &&
-      !unitSearch.trim()
-    ) {
+    if (!hasNumericFilter && !hasTenantFilter && !hasUnitFilter) {
       setFilteredTenants(null);
       return;
     }
@@ -1096,15 +1098,18 @@ function PropertyDetail({
       ? filteredTenants || screeningBase
       : transactionBase;
 
-  // For transactions view, sort high → low eviction risk
-  const tenantsSorted =
-    viewMode === "transactions"
-      ? [...tenantsToRender].sort((a, b) => {
-          const aScore = Number(a?.eviction_risk_score ?? -Infinity);
-          const bScore = Number(b?.eviction_risk_score ?? -Infinity);
-          return bScore - aScore;
-        })
-      : tenantsToRender;
+  // ALWAYS sort highest → lowest by eviction risk score
+  const tenantsSorted = [...tenantsToRender].sort((a, b) => {
+    const aScore =
+      a && a.eviction_risk_score != null
+        ? Number(a.eviction_risk_score)
+        : -Infinity;
+    const bScore =
+      b && b.eviction_risk_score != null
+        ? Number(b.eviction_risk_score)
+        : -Infinity;
+    return bScore - aScore;
+  });
 
   const handleSelectTenant = (tenantCode) => {
     setSelectedTenants((prev) =>
@@ -1290,6 +1295,10 @@ function PropertyDetail({
                           <th className="px-3 py-2 text-right">
                             Debt-to-income
                           </th>
+                          {/* Eviction score = 2nd right-most column */}
+                          <th className="px-3 py-2 text-left">
+                            Eviction risk (0–100)
+                          </th>
                           <th className="px-3 py-2 text-center">Select</th>
                         </>
                       ) : (
@@ -1307,14 +1316,20 @@ function PropertyDetail({
                     {tenantsSorted.map((tenant, index) => {
                       const tenantCode = (tenant.tscode || "").toString();
                       const unitCode = (tenant.uscode || "").toString();
-                      const isSelected =
-                        selectedTenants.includes(tenantCode);
+                      const isSelected = selectedTenants.includes(tenantCode);
 
-                      const score =
-                        viewMode === "screening"
-                          ? tenant.riskscore
-                          : tenant.eviction_risk_score;
-                      const scoreDisplay = formatRiskScore(score);
+                      // CREDIT risk score from screening data
+                      const creditRisk = tenant.riskscore;
+                      const creditRiskDisplay = Number.isFinite(
+                        Number(creditRisk)
+                      )
+                        ? Number(creditRisk).toFixed(0)
+                        : "–";
+
+                      // MODEL eviction risk score (0–100)
+                      const evictionScore = tenant.eviction_risk_score;
+                      const evictionScoreDisplay =
+                        formatRiskScore(evictionScore);
 
                       return (
                         <tr
@@ -1343,11 +1358,12 @@ function PropertyDetail({
                                   : "—"}
                               </td>
 
-                              {/* UNCOLORED screening risk score – plain text */}
+                              {/* CREDIT risk score from screening – plain text */}
                               <td className="px-3 py-3 text-sm text-[#0A1A33]">
-                                {scoreDisplay}
+                                {creditRiskDisplay}
                               </td>
 
+                              {/* Total debt */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.totdebt != null
                                   ? Number(
@@ -1355,20 +1371,37 @@ function PropertyDetail({
                                     ).toLocaleString()
                                   : "—"}
                               </td>
+
+                              {/* Rent-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.rentincratio != null
-                                  ? `${(
-                                      tenant.rentincratio * 100
-                                    ).toFixed(1)}%`
+                                  ? `${(tenant.rentincratio * 100).toFixed(
+                                      1
+                                    )}%`
                                   : "—"}
                               </td>
+
+                              {/* Debt-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.debtincratio != null
-                                  ? `${(
-                                      tenant.debtincratio * 100
-                                    ).toFixed(1)}%`
+                                  ? `${(tenant.debtincratio * 100).toFixed(
+                                      1
+                                    )}%`
                                   : "—"}
                               </td>
+
+                              {/* SCREENING MODEL eviction risk (0–100) – COLORED PILL (2nd right-most) */}
+                              <td className="px-3 py-3">
+                                <span
+                                  className={`inline-flex min-w-[3rem] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${riskScoreClasses(
+                                    evictionScore
+                                  )}`}
+                                >
+                                  {evictionScoreDisplay}
+                                </span>
+                              </td>
+
+                              {/* Select (right-most) */}
                               <td className="px-3 py-3 text-center">
                                 <button
                                   onClick={() =>
@@ -1406,10 +1439,10 @@ function PropertyDetail({
                               <td className="px-3 py-3">
                                 <span
                                   className={`inline-flex min-w-[3rem] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold ${riskScoreClasses(
-                                    score
+                                    evictionScore
                                   )}`}
                                 >
-                                  {scoreDisplay}
+                                  {evictionScoreDisplay}
                                 </span>
                               </td>
 
@@ -1443,8 +1476,7 @@ function PropertyDetail({
                     No tenants in this view
                   </p>
                   <p className="mt-1 text-xs text-gray-400">
-                    Try switching model views or choosing a different
-                    property.
+                    Try switching model views or choosing a different property.
                   </p>
                 </div>
               )}
@@ -1454,9 +1486,7 @@ function PropertyDetail({
           {/* Analytics placeholder */}
           <div className="rounded-2xl border bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-black">
-                Analytics
-              </h3>
+              <h3 className="text-sm font-semibold text-black">Analytics</h3>
               <span className="text-xs text-zinc-500">Coming soon</span>
             </div>
             <p className="mt-4 text-sm text-zinc-500">
@@ -1467,10 +1497,10 @@ function PropertyDetail({
 
         {/* Screening filters side panel */}
         <div
-          className={`pointer-events-none absolute right-0 top-0 h-full w-80 transform bg-white shadow-md transition-all duration-300 ease-out ${
+          className={`absolute right-0 top-0 h-full w-80 transform bg-white shadow-md transition-all duration-300 ease-out ${
             filtersActive
               ? "pointer-events-auto translate-x-0 opacity-100"
-              : "translate-x-full opacity-0"
+              : "pointer-events-none translate-x-full opacity-0"
           }`}
         >
           <div className="flex h-full flex-col p-6">
@@ -1497,6 +1527,7 @@ function PropertyDetail({
             </div>
 
             <div className="space-y-4 text-sm">
+              {/* Numeric filter only – tenant/unit search lives at the top of the table now */}
               <div>
                 <label className="text-xs font-medium text-zinc-500">
                   Numeric field
@@ -1541,30 +1572,6 @@ function PropertyDetail({
                   className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
                 />
               </div>
-
-              <div>
-                <label className="text-xs font-medium text-zinc-500">
-                  Tenant code contains
-                </label>
-                <input
-                  type="text"
-                  value={tenantSearch}
-                  onChange={(e) => setTenantSearch(e.target.value)}
-                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-zinc-500">
-                  Unit code contains
-                </label>
-                <input
-                  type="text"
-                  value={unitSearch}
-                  onChange={(e) => setUnitSearch(e.target.value)}
-                  className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
-                />
-              </div>
             </div>
 
             <div className="mt-auto flex gap-2 pt-6">
@@ -1591,34 +1598,37 @@ function PropertyDetail({
 
 
 
-export function PropertyView({ selectedTenants, setSelectedTenants }) {
-  const [selectedProperty, setSelectedProperty] = useState(null);
 
-  const [screeningTenantData, setScreeningTenantData] = useState({});
-  const [transactionTenantData, setTransactionTenantData] = useState({});
+    export function PropertyView({ selectedTenants, setSelectedTenants }) {
+      const [selectedProperty, setSelectedProperty] = useState(null);
 
-  const [loadingScreening, setLoadingScreening] = useState(true);
-  const [loadingTransactions, setLoadingTransactions] = useState(true);
-  const [error, setError] = useState(null);
+      const [screeningTenantData, setScreeningTenantData] = useState({});
+      const [transactionTenantData, setTransactionTenantData] = useState({});
 
-  // Screening model tenants (existing /tenants/active)
-  useEffect(() => {
-    fetch("http://127.0.0.1:5000/tenants/active")
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to fetch screening tenant data");
-        return res.json();
-      })
-      .then((data) => {
-        setScreeningTenantData(data || {});
-        setLoadingScreening(false);
-        console.log("Screening tenants:", data);
-      })
-      .catch((err) => {
-        console.error("Error fetching screening tenants:", err);
-        setError((prev) => prev || err.message);
-        setLoadingScreening(false);
-      });
-  }, []);
+      const [loadingScreening, setLoadingScreening] = useState(true);
+      const [loadingTransactions, setLoadingTransactions] = useState(true);
+      const [error, setError] = useState(null);
+
+      // Screening model tenants (existing /tenants/active)
+      // Screening model tenants (NEW /tenants/screening-eviction-risk)
+    useEffect(() => {
+      fetch("http://127.0.0.1:5000/tenants/screening-eviction-risk")
+        .then((res) => {
+          if (!res.ok) throw new Error("Failed to fetch screening tenant data");
+          return res.json();
+        })
+        .then((data) => {
+          setScreeningTenantData(data || {});
+          setLoadingScreening(false);
+          console.log("Screening-model tenants:", data);
+        })
+        .catch((err) => {
+          console.error("Error fetching screening tenants:", err);
+          setError((prev) => prev || err.message);
+          setLoadingScreening(false);
+        });
+    }, []);
+
 
   // Transaction model tenants (new /tenants/eviction-risk)
   useEffect(() => {
