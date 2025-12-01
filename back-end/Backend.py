@@ -1171,9 +1171,9 @@ def _compute_transaction_model_payload():
 
 def _compute_screening_model_payload():
     """
-    Train a CatBoost model using screening + early-transaction features
-    to predict eviction (sevicted), then score the 2024+ "active"
-    tenant cohort (same definition as /tenants/active).
+    Train a CatBoost model using **screening-only features** (plus sevicted
+    label from transacts) to predict eviction (sevicted), then score the
+    2024+ cohort that has screening data.
 
     Returns:
       {
@@ -1187,7 +1187,7 @@ def _compute_screening_model_payload():
             "totdebt": float | None,
             "rentincratio": float | None,
             "debtincratio": float | None,
-            "eviction_risk_score": float | None
+            "eviction_risk_score": float | None   # 0–100
           },
           ...
         ],
@@ -1198,298 +1198,558 @@ def _compute_screening_model_payload():
     import numpy as np
     from sklearn.model_selection import train_test_split
     from catboost import CatBoostClassifier, Pool
+    from datetime import date, datetime as dt
 
-    # -------------------------------
-    # Helpers copied from notebook
-    # -------------------------------
-    YES_SET = {"Y", "YES", "TRUE", "T", "1"}
-    NO_SET  = {"N", "NO", "FALSE", "F", "0"}
-
-    def map_flag(x):
-        """Notebook-style Y/N -> {1,0} mapping for sevicted/flags."""
-        if pd.isna(x):
-            return np.nan
-        x = str(x).strip().upper()
-        if x in YES_SET:
-            return 1
-        if x in NO_SET:
-            return 0
-        return np.nan
-
-    def coerce_numeric_series(s: pd.Series) -> pd.Series:
+    # ------------------------------------------------------------------
+    # Helper functions (adapted from NEW MODEL)
+    # ------------------------------------------------------------------
+    def clean_binary_flag(series: pd.Series) -> pd.Series:
         """
-        Notebook-style numeric coercion:
-        strip $, %, commas, and parentheses, then to_numeric.
+        Normalize common binary encodings to {0,1}.
+        Handles:
+        - booleans
+        - 0/1
+        - 'Y'/'N', 'YES'/'NO'
+        - 'TRUE'/'FALSE'
         """
-        s_clean = (
-            s.astype(str)
-             .str.replace(r"[,$%]", "", regex=True)
-             .str.replace(r"\(", "-", regex=True)
-             .str.replace(r"\)", "", regex=True)
-             .str.strip()
-        )
-        return pd.to_numeric(s_clean, errors="coerce")
+        s = series.copy()
 
-    # -------------------------------
-    # 1) Build labelled training set
-    # -------------------------------
-    # IMPORTANT: inner join so we only keep tenants that have BOTH
-    # transaction rows AND screening rows that successfully merge.
+        # If already numeric-ish, coerce and return
+        if pd.api.types.is_numeric_dtype(s):
+            return pd.to_numeric(s, errors="coerce")
+
+        s = s.astype(str).str.strip().str.upper()
+        mapping = {
+            "1": 1,
+            "0": 0,
+            "Y": 1,
+            "N": 0,
+            "YES": 1,
+            "NO": 0,
+            "TRUE": 1,
+            "FALSE": 0,
+        }
+        s = s.map(mapping)
+        return s
+
+    def coerce_numeric(series: pd.Series) -> pd.Series:
+        """Coerce numeric-like strings (optionally with %) to float."""
+        s = series.astype(str).str.replace("%", "", regex=False)
+        return pd.to_numeric(s, errors="coerce")
+
+    def combine_years_months(df: pd.DataFrame, years_col: str, months_col: str) -> pd.Series:
+        """Combine years + months into total months."""
+        years = df[years_col] if years_col in df.columns else 0
+        months = df[months_col] if months_col in df.columns else 0
+        years = pd.to_numeric(years, errors="coerce").fillna(0)
+        months = pd.to_numeric(months, errors="coerce").fillna(0)
+        return years * 12 + months
+
+    def _safe_float(v):
+        return float(v) if v is not None and not pd.isna(v) else None
+
+    # Map DB column names -> canonical NEW MODEL names
+    RENAME_MAP = {
+        # dates
+        "appcreddate": "applicant_credit_date",
+        # booleans / flags
+        "creditrun": "credit_run",
+        "hascpmess": "has_checkpoint_msgs",
+        "hasconsstmt": "has_consumer_stmt",
+        # employment / residence tenure
+        "currempmon": "current_emp_months",
+        "currempyear": "current_emp_years",
+        "currresmon": "current_res_months",
+        "currresyear": "current_res_years",
+        "prevempmon": "previous_emp_months",
+        "prevempyear": "previous_emp_years",
+        "prevresmon": "previous_res_months",
+        "prevresyear": "previous_res_years",
+        # income / debt
+        "primincome": "primary_income",
+        "addincome": "additional_income",
+        "riskscore": "risk_score",
+        "rentincratio": "rent_to_income_ratio_pct",
+        "debtincratio": "debt_to_income_ratio_pct",
+        "debtcredratio": "debt_to_credit_ratio_pct",
+        "studdebt": "student_debt",
+        "meddebt": "medical_debt",
+        "totscordebt": "total_scorable_debt",
+        "totdebt": "total_debt",
+        "appmoninc": "application_monthly_income",
+        "apptotdebt": "application_total_debt_policy",
+        "avgriskscore": "avg_risk_score",
+        # ids / names
+        "voyappcode": "voyager_applicant_code",
+        "voypropcode": "voyager_property_code",
+        "propertyid": "property_id",
+        "companyname": "company_name",
+        "companycode": "company_code",
+        "propname": "property_name",
+        "voypropname": "voyager_property_name",
+        "appstatus": "applicant_status",
+        "scoremodel": "score_model",
+        # free-text reason / checkpoint / review
+        "reasonone": "reason_1",
+        "reasontwo": "reason_2",
+        "reasonthree": "reason_3",
+        "checkmes1": "checkpoint_message_1",
+        "checkmes2": "checkpoint_message_2",
+        "itemrev1": "item_to_review_1",
+        "itemrev2": "item_to_review_2",
+        "itemrev3": "item_to_review_3",
+    }
+
+    def _prepare_screening_features(
+        df_raw: pd.DataFrame,
+        is_train: bool,
+        trained_feature_cols=None,
+        trained_categorical_cols=None,
+    ):
+        """
+        Shared feature pipeline for training & scoring, adapted from NEW MODEL.
+
+        When is_train=True: returns (X, y, feature_cols, categorical_feature_cols)
+        When is_train=False: returns (X, None, feature_cols, categorical_feature_cols) but
+        uses `trained_feature_cols` / `trained_categorical_cols` to align columns.
+        """
+        df = df_raw.copy()
+
+        # 0) Rename DB columns -> canonical names used in NEW MODEL
+        df.rename(columns=RENAME_MAP, inplace=True)
+        df.columns = [str(c).strip() for c in df.columns]
+
+        target_col = "sevicted" if is_train else None
+
+        # --- Handle label for training ---
+        if is_train:
+            if target_col not in df.columns:
+                return None, None, None, None
+
+            df = df[df[target_col].notna()].copy()
+            df[target_col] = clean_binary_flag(df[target_col])
+            df = df[df[target_col].isin([0, 1])].copy()
+            if df[target_col].nunique() < 2:
+                return None, None, None, None
+
+        # --- Type conversions: dates, numerics, booleans ---
+        date_cols_expected = ["applicant_credit_date", "date"]
+        date_cols = [c for c in date_cols_expected if c in df.columns]
+        for c in date_cols:
+            df[c] = pd.to_datetime(df[c], errors="coerce")
+
+        numeric_cols_expected = [
+            "age",
+            "current_emp_months",
+            "current_emp_years",
+            "current_res_months",
+            "current_res_years",
+            "previous_emp_months",
+            "previous_emp_years",
+            "previous_res_months",
+            "previous_res_years",
+            "income",
+            "primary_income",
+            "additional_income",
+            "risk_score",
+            "rent",
+            "rent_to_income_ratio_pct",
+            "debt_to_income_ratio_pct",
+            "debt_to_credit_ratio_pct",
+            "student_debt",
+            "medical_debt",
+            "total_scorable_debt",
+            "total_debt",
+            "application_monthly_income",
+            "application_total_debt_policy",
+            "avg_risk_score",
+        ]
+        numeric_cols = [c for c in numeric_cols_expected if c in df.columns]
+        for c in numeric_cols:
+            df[c] = coerce_numeric(df[c])
+
+        bool_like_cols_expected = [
+            "credit_run",
+            "has_checkpoint_msgs",
+            "has_consumer_stmt",
+        ]
+        for c in bool_like_cols_expected:
+            if c in df.columns:
+                df[c] = clean_binary_flag(df[c]).astype("float")
+
+        # --- Feature engineering ---
+        # Tenure in months
+        if "current_emp_years" in df.columns or "current_emp_months" in df.columns:
+            df["current_emp_tenure_months"] = combine_years_months(
+                df, "current_emp_years", "current_emp_months"
+            )
+
+        if "current_res_years" in df.columns or "current_res_months" in df.columns:
+            df["current_res_tenure_months"] = combine_years_months(
+                df, "current_res_years", "current_res_months"
+            )
+
+        if "previous_emp_years" in df.columns or "previous_emp_months" in df.columns:
+            df["previous_emp_tenure_months"] = combine_years_months(
+                df, "previous_emp_years", "previous_emp_months"
+            )
+
+        if "previous_res_years" in df.columns or "previous_res_months" in df.columns:
+            df["previous_res_tenure_months"] = combine_years_months(
+                df, "previous_res_years", "previous_res_months"
+            )
+
+        # Normalize percentage ratios to 0–1
+        ratio_pct_cols = [
+            "rent_to_income_ratio_pct",
+            "debt_to_income_ratio_pct",
+            "debt_to_credit_ratio_pct",
+        ]
+        for c in ratio_pct_cols:
+            if c in df.columns:
+                df[c.replace("_pct", "_ratio")] = df[c] / 100.0
+
+        # Flags for having student / medical debt
+        if "student_debt" in df.columns:
+            df["has_student_debt"] = (df["student_debt"].fillna(0) > 0).astype(int)
+
+        if "medical_debt" in df.columns:
+            df["has_medical_debt"] = (df["medical_debt"].fillna(0) > 0).astype(int)
+
+        # Primary income share
+        if "primary_income" in df.columns and "income" in df.columns:
+            df["primary_income_share"] = np.where(
+                (df["income"] > 0) & df["income"].notna(),
+                df["primary_income"] / df["income"],
+                np.nan,
+            )
+
+        # Log transforms for skewed amounts
+        log_cols = [
+            "income",
+            "application_monthly_income",
+            "total_debt",
+            "total_scorable_debt",
+            "student_debt",
+            "medical_debt",
+            "rent",
+        ]
+        for c in log_cols:
+            if c in df.columns:
+                df[f"log_{c}"] = np.log1p(df[c].clip(lower=0))
+
+        # Date parts from screening date
+        date_col_for_features = None
+        if "applicant_credit_date" in df.columns:
+            date_col_for_features = "applicant_credit_date"
+        elif "date" in df.columns:
+            date_col_for_features = "date"
+
+        if date_col_for_features is not None:
+            df[f"{date_col_for_features}_year"] = df[date_col_for_features].dt.year
+            df[f"{date_col_for_features}_month"] = df[date_col_for_features].dt.month
+            df[f"{date_col_for_features}_dayofweek"] = df[
+                date_col_for_features
+            ].dt.dayofweek
+
+        # If we're *only* scoring, align to trained feature set and bail early
+        if not is_train:
+            if trained_feature_cols is None:
+                return None, None, None, None
+
+            for c in trained_feature_cols:
+                if c not in df.columns:
+                    df[c] = np.nan
+
+            X = df[trained_feature_cols].copy()
+            return X, None, trained_feature_cols, trained_categorical_cols
+
+        # ------------------------------------------------------------------
+        # Training-time feature selection / leakage control (NEW MODEL logic)
+        # ------------------------------------------------------------------
+        id_cols = [
+            "applicant_credit_applicant_id",
+            "applicant_credit_id",
+            "applicant_id",
+            "voyager_applicant_code",
+            "voyager_property_code",
+            "property_id",
+            "application_id",
+        ]
+        name_cols = [
+            "company_name",
+            "company_code",
+            "property_name",
+            "voyager_property_name",
+        ]
+        free_text_cols = [
+            "reason_1",
+            "reason_2",
+            "reason_3",
+            "checkpoint_message_1",
+            "checkpoint_message_2",
+            "item_to_review_1",
+            "item_to_review_2",
+            "item_to_review_3",
+        ]
+        leakage_cols = ["applicant_status"]
+
+        cols_to_exclude = set()
+        for c in id_cols + name_cols + free_text_cols + leakage_cols + [target_col]:
+            if c in df.columns:
+                cols_to_exclude.add(c)
+        for c in date_cols:
+            if c in df.columns:
+                cols_to_exclude.add(c)
+
+        feature_cols = [c for c in df.columns if c not in cols_to_exclude]
+
+        numeric_feature_candidates = [
+            c for c in feature_cols if pd.api.types.is_numeric_dtype(df[c])
+        ]
+        categorical_feature_candidates = [
+            c for c in feature_cols if not pd.api.types.is_numeric_dtype(df[c])
+        ]
+
+        # Force some numeric-looking cols to categorical
+        force_categorical = [c for c in ["category", "score_model", "zip"]
+                             if c in numeric_feature_candidates]
+        numeric_feature_candidates = [
+            c for c in numeric_feature_candidates if c not in force_categorical
+        ]
+        categorical_feature_candidates = categorical_feature_candidates + force_categorical
+
+        # Drop redundant numeric inputs (keep derived features instead)
+        optional_drop_numeric = [
+            "current_emp_months",
+            "current_emp_years",
+            "current_res_months",
+            "current_res_years",
+            "previous_emp_months",
+            "previous_emp_years",
+            "previous_res_months",
+            "previous_res_years",
+            "rent_to_income_ratio_pct",
+            "debt_to_income_ratio_pct",
+            "debt_to_credit_ratio_pct",
+        ]
+        numeric_feature_candidates = [
+            c for c in numeric_feature_candidates if c not in optional_drop_numeric
+        ]
+
+        feature_cols = numeric_feature_candidates + categorical_feature_candidates
+
+        X = df[feature_cols].copy()
+        y = df[target_col].astype(int).copy()
+
+        # Drop degenerate features (all-missing or single level)
+        all_missing_cols = [c for c in X.columns if X[c].isna().all()]
+        single_level_cols = [
+            c for c in X.columns if X[c].dropna().nunique() <= 1
+        ]
+        drop_cols = sorted(set(all_missing_cols + single_level_cols))
+        if drop_cols:
+            X = X.drop(columns=drop_cols)
+
+        feature_cols = X.columns.tolist()
+        categorical_feature_candidates = [
+            c for c in feature_cols if not pd.api.types.is_numeric_dtype(X[c])
+        ]
+
+        return X, y, feature_cols, categorical_feature_candidates
+
+    # ------------------------------------------------------------------
+    # 1. Build training set: screening rows with known sevicted label
+    # ------------------------------------------------------------------
     q_train = """
         SELECT
-            t.pscode,
-            t.tscode,
-            t.sevicted,
-            t.dnumnsf,
-            t.dnumlate,
-            t.davgdayslate,
-            t.srent,
-            t.dincome,
-            t.daypaid,
-            t.dpaysourcechange,
-            s.riskscore,
-            s.totdebt,
-            s.rentincratio,
-            s.debtincratio,
-            s.age,
-            s.currempmon,
-            s.currempyear,
-            s.currresmon,
-            s.currresyear,
-            s.debtcredratio
-        FROM transacts t
-        INNER JOIN screening s
+            s.*,
+            t.sevicted
+        FROM screening s
+        INNER JOIN transacts t
             ON t.tscode = s.voyappcode
-        WHERE t.pscode IS NOT NULL
-          AND t.tscode IS NOT NULL
-          AND t.sevicted IS NOT NULL
-          AND s.voyappcode IS NOT NULL;
+        WHERE t.sevicted IS NOT NULL;
     """
-    train_df = pd.read_sql(q_train, conn)
+    train_df_raw = pd.read_sql(q_train, conn)
 
-    if train_df.empty or "sevicted" not in train_df.columns:
+    if train_df_raw.empty:
         return {}
 
-    # Binary label from sevicted (notebook-style)
-    train_df["label"] = train_df["sevicted"].apply(map_flag)
-    train_df = train_df[~train_df["label"].isna()].copy()
-
-    if train_df["label"].nunique() < 2 or len(train_df) < 100:
-        # Not enough signal to train a meaningful model
-        return {}
-
-    train_df["label"] = train_df["label"].astype(int)
-
-    # Numeric feature set (screening + early transaction features)
-    SCREENING_FEATURES = [
-        "dnumnsf",
-        "dnumlate",
-        "davgdayslate",
-        "srent",
-        "dincome",
-        "daypaid",
-        "dpaysourcechange",
-        "riskscore",
-        "totdebt",
-        "rentincratio",
-        "debtincratio",
-        "age",
-        "currempmon",
-        "currempyear",
-        "currresmon",
-        "currresyear",
-        "debtcredratio",
-    ]
-    used_features = [c for c in SCREENING_FEATURES if c in train_df.columns]
-
-    if not used_features:
-        return {}
-
-    # Notebook-style numeric coercion on numeric-like object columns FIRST
-    for c in used_features:
-        if c in train_df.columns:
-            if train_df[c].dtype == "object":
-                train_df[c] = coerce_numeric_series(train_df[c])
-            # Final guard: ensure numeric dtype
-            train_df[c] = pd.to_numeric(train_df[c], errors="coerce")
-
-    X_train_full = train_df[used_features].copy()
-    y_train_full = train_df["label"].copy()
-
-    # ONLY keep rows that actually have screening data (at least one of these non-null)
-    screening_cols = [
-        c
-        for c in ["riskscore", "totdebt", "rentincratio", "debtincratio"]
-        if c in X_train_full.columns
-    ]
-    if screening_cols:
-        mask_has_screening = X_train_full[screening_cols].notna().any(axis=1)
-        X_train_full = X_train_full[mask_has_screening]
-        y_train_full = y_train_full[mask_has_screening]
-
-    if X_train_full.empty or y_train_full.nunique() < 2 or len(X_train_full) < 100:
-        return {}
-
-    # Median imputation for numeric features (keep medians to reuse on scoring set)
-    medians = {}
-    for c in used_features:
-        med = X_train_full[c].median()
-        medians[c] = med
-        X_train_full[c] = X_train_full[c].fillna(med)
-
-    # Train/validation split for basic sanity-check AUC
-    try:
-        X_train, X_valid, y_train, y_valid = train_test_split(
-            X_train_full,
-            y_train_full,
-            test_size=0.2,
-            random_state=42,
-            stratify=y_train_full,
-        )
-    except ValueError:
-        # Fallback if stratification fails
-        X_train, X_valid, y_train, y_valid = train_test_split(
-            X_train_full,
-            y_train_full,
-            test_size=0.2,
-            random_state=42,
-        )
-
-    # Class weight for imbalance (same as notebook)
-    pos_count = (y_train == 1).sum()
-    neg_count = (y_train == 0).sum()
-    pos_weight = float(neg_count) / float(pos_count) if pos_count > 0 else 1.0
-
-    # CatBoost with tuned params from notebook
-    model = CatBoostClassifier(
-        loss_function="Logloss",
-        eval_metric="AUC",
-        depth=5,
-        learning_rate=0.01,
-        iterations=500,
-        l2_leaf_reg=3,
-        border_count=32,
-        bagging_temperature=0.0,
-        random_seed=42,
-        class_weights=[1.0, pos_weight],
-        verbose=False,
+    X_all, y_all, feature_cols, cat_cols = _prepare_screening_features(
+        train_df_raw, is_train=True
     )
 
-    train_pool = Pool(X_train, label=y_train)
-    valid_pool = Pool(X_valid, label=y_valid)
-    model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+    if X_all is None or y_all is None:
+        return {}
+    if len(X_all) < 100 or y_all.nunique() < 2:
+        # Not enough labelled data for a stable model
+        return {}
 
-    # -------------------------------
-    # 2) Scoring cohort: same as /tenants/active,
-    #    but ONLY where screening data exists
-    # -------------------------------
+    # ------------------------------------------------------------------
+    # 2. Train/val/test split (60/20/20) and CatBoost model (NEW MODEL params)
+    # ------------------------------------------------------------------
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
+        X_all, y_all, test_size=0.2, random_state=42, stratify=y_all
+    )
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_full,
+        y_train_full,
+        test_size=0.25,
+        random_state=42,
+        stratify=y_train_full,
+    )  # 0.25 of 0.8 => 0.2 => 60/20/20
+
+    def _prep_catboost_frames(X: pd.DataFrame):
+        X_cb = X.copy()
+        for c in cat_cols or []:
+            if c in X_cb.columns:
+                X_cb[c] = X_cb[c].astype("string").fillna("MISSING")
+        cat_idx = [
+            X_cb.columns.get_loc(c)
+            for c in (cat_cols or [])
+            if c in X_cb.columns
+        ]
+        return X_cb, cat_idx
+
+    X_train_cb, cat_idx = _prep_catboost_frames(X_train)
+    X_val_cb, _ = _prep_catboost_frames(X_val)
+    X_test_cb, _ = _prep_catboost_frames(X_test)
+
+    cb_model = CatBoostClassifier(
+        loss_function="Logloss",
+        eval_metric="AUC",
+        depth=4,
+        learning_rate=0.06,
+        l2_leaf_reg=1,
+        iterations=1000,
+        random_state=42,
+        auto_class_weights="Balanced",
+        verbose=False,
+        early_stopping_rounds=50,
+    )
+
+    cb_model.fit(
+        X_train_cb,
+        y_train,
+        cat_features=cat_idx,
+        eval_set=(X_val_cb, y_val),
+        use_best_model=True,
+    )
+
+    # (Optional metrics: we skip printing to keep backend clean.)
+
+    # ------------------------------------------------------------------
+    # 3. Scoring cohort: 2024+ tenants with screening rows
+    # ------------------------------------------------------------------
     q_score = """
-        SELECT 
+        SELECT
             t.pscode,
             t.tscode,
             t.uscode,
             t.dtmovein,
             t.dtmoveout,
-            s.riskscore,
-            s.totdebt,
-            s.rentincratio,
-            s.debtincratio,
-            t.dnumnsf,
-            t.dnumlate,
-            t.davgdayslate,
-            t.srent,
-            t.dincome,
-            t.daypaid,
-            t.dpaysourcechange,
-            s.age,
-            s.currempmon,
-            s.currempyear,
-            s.currresmon,
-            s.currresyear,
-            s.debtcredratio
+            s.*
         FROM transacts t
         INNER JOIN screening s
             ON t.tscode = s.voyappcode
         WHERE t.pscode IS NOT NULL
           AND t.tscode IS NOT NULL
           AND t.dtmovein IS NOT NULL
-          AND s.voyappcode IS NOT NULL
-          AND t.dtmovein >= DATE '2024-01-01'
+          AND t.dtmovein >= DATE '2024-01-01';
     """
-    score_df = pd.read_sql(q_score, conn)
+    score_df_raw = pd.read_sql(q_score, conn)
 
-    if score_df.empty:
+    if score_df_raw.empty:
         return {}
 
-    # Apply same numeric-like cleaning to scoring set
-    for c in used_features:
-        if c in score_df.columns:
-            if score_df[c].dtype == "object":
-                score_df[c] = coerce_numeric_series(score_df[c])
-            score_df[c] = pd.to_numeric(score_df[c], errors="coerce")
-        else:
-            score_df[c] = np.nan
-
-    # Only keep scoring rows where we actually have screening info
-    screening_cols_score = [
-        c
-        for c in ["riskscore", "totdebt", "rentincratio", "debtincratio"]
-        if c in score_df.columns
+    # Keep only rows with *some* screening numeric info present,
+    # so the screening view only shows tenants that truly have screening data.
+    key_screen_cols = [
+        c for c in ["riskscore", "totdebt", "rentincratio", "debtincratio"]
+        if c in score_df_raw.columns
     ]
-    if screening_cols_score:
-        mask_has_screening = score_df[screening_cols_score].notna().any(axis=1)
-        score_df = score_df[mask_has_screening].copy()
-        if score_df.empty:
+    if key_screen_cols:
+        mask_has_screen = score_df_raw[key_screen_cols].notna().any(axis=1)
+        score_df_raw = score_df_raw[mask_has_screen].copy()
+        if score_df_raw.empty:
             return {}
 
-    X_score = score_df[used_features].copy()
-    for c in used_features:
-        med = medians.get(c, 0.0)
-        X_score[c] = X_score[c].fillna(med)
+    # Meta columns for output (use DB names here)
+    meta_cols = [
+        "pscode",
+        "tscode",
+        "uscode",
+        "dtmovein",
+        "dtmoveout",
+        "riskscore",
+        "totdebt",
+        "rentincratio",
+        "debtincratio",
+    ]
+    meta_cols = [c for c in meta_cols if c in score_df_raw.columns]
+    meta_df = score_df_raw[meta_cols].copy()
 
-    score_pool = Pool(X_score)
-    proba = model.predict_proba(score_pool)[:, 1]
+    # Build feature matrix using *same* feature_cols / cat_cols as training
+    X_score, _, _, _ = _prepare_screening_features(
+        score_df_raw,
+        is_train=False,
+        trained_feature_cols=feature_cols,
+        trained_categorical_cols=cat_cols,
+    )
+    if X_score is None or X_score.empty:
+        return {}
+
+    X_score_cb, _ = _prep_catboost_frames(X_score)
+
+    # ------------------------------------------------------------------
+    # 4. Predict probabilities and convert to 0–100 eviction risk scores
+    # ------------------------------------------------------------------
+    proba = cb_model.predict_proba(X_score_cb)[:, 1]
     scores_0_100 = (proba * 100.0).round(1)
 
-    score_df = score_df.copy()
-    score_df["eviction_risk_score"] = scores_0_100
-
-    def _safe_float(v):
-        return float(v) if v is not None and not pd.isna(v) else None
-
+    # ------------------------------------------------------------------
+    # 5. Build property -> tenants mapping payload
+    # ------------------------------------------------------------------
     out = {}
-    for _, row in score_df.iterrows():
+    for i, (_, row) in enumerate(meta_df.iterrows()):
         pscode = row.get("pscode")
         if not pscode:
             continue
 
-        if pscode not in out:
-            out[pscode] = []
-
         dtmovein_val = row.get("dtmovein")
         dtmoveout_val = row.get("dtmoveout")
 
-        out[pscode].append(
-            {
-                "tscode": row.get("tscode"),
-                "uscode": row.get("uscode"),
-                "dtmovein": dtmovein_val.isoformat()
-                if dtmovein_val is not None and not pd.isna(dtmovein_val)
-                else None,
-                "dtmoveout": dtmoveout_val.isoformat()
-                if dtmoveout_val is not None and not pd.isna(dtmoveout_val)
-                else None,
-                # keep raw screening criteria for filters
-                "riskscore": _safe_float(row.get("riskscore")),
-                "totdebt": _safe_float(row.get("totdebt")),
-                "rentincratio": _safe_float(row.get("rentincratio")),
-                "debtincratio": _safe_float(row.get("debtincratio")),
-                # model-based eviction risk (0–100)
-                "eviction_risk_score": _safe_float(row.get("eviction_risk_score")),
-            }
-        )
+        # Normalize dates to ISO
+        def _to_iso(d):
+            if d is None or pd.isna(d):
+                return None
+            if isinstance(d, pd.Timestamp):
+                return d.date().isoformat()
+            if isinstance(d, date):
+                return d.isoformat()
+            # fall back to string
+            try:
+                return pd.to_datetime(d).date().isoformat()
+            except Exception:
+                return None
+
+        tenant_entry = {
+            "tscode": row.get("tscode"),
+            "uscode": row.get("uscode"),
+            "dtmovein": _to_iso(dtmovein_val),
+            "dtmoveout": _to_iso(dtmoveout_val),
+            "riskscore": _safe_float(row.get("riskscore")),
+            "totdebt": _safe_float(row.get("totdebt")),
+            "rentincratio": _safe_float(row.get("rentincratio")),
+            "debtincratio": _safe_float(row.get("debtincratio")),
+            # NEW MODEL eviction risk, scaled 0–100
+            "eviction_risk_score": float(scores_0_100[i]),
+        }
+
+        out.setdefault(pscode, []).append(tenant_entry)
 
     return out
+
 
 
 # @app.route("/upload", methods=["POST"])
