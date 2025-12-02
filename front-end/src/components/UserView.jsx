@@ -463,133 +463,128 @@ export function PortfolioView() {
   }
 
   return (
-    // OUTER: scroll container for the live UI
-    <div className="w-full h-full flex flex-col py-2 overflow-auto scrollbar-hide bg-white">
-      {/* INNER: full natural-height content.
-              We export THIS. It is NOT scroll-clipped. */}
-      <div className="flex flex-col gap-4" ref={exportRef}>
-        {/* FILTER BAR */}
-        <div className="flex flex-wrap items-end gap-4 text-sm">
-          {/* Start Date */}
-          <DateDropdown
-            label="Start"
-            valueISO={filters.startISO}
-            onChangeISO={filters.setStartISO}
-          />
+  // OUTER: scroll container for the live UI
+  <div className="w-full h-full flex flex-col py-2 overflow-auto scrollbar-hide bg-white">
+    {/* INNER: full natural-height content.
+            We export THIS. It is NOT scroll-clipped. */}
+    <div className="flex flex-col gap-4" ref={exportRef}>
+      {/* FILTER BAR */}
+      <div className="flex flex-wrap items-end gap-4 text-sm">
+        {/* Start Date */}
+        <DateDropdown
+          label="Start"
+          valueISO={filters.startISO}
+          onChangeISO={filters.setStartISO}
+        />
 
-          {/* End Date */}
-          <DateDropdown
-            label="End"
-            valueISO={filters.endISO}
-            onChangeISO={filters.setEndISO}
-          />
+        {/* End Date */}
+        <DateDropdown
+          label="End"
+          valueISO={filters.endISO}
+          onChangeISO={filters.setEndISO}
+        />
 
-          {/* Properties */}
-          <PropertyMultiSelect
-            options={filters.options.pscodes}
-            selected={filters.pscodes}
-            setSelected={filters.setPscodes}
-            dropdownId="props"
-            openDropdown={openDropdown}
-            setOpenDropdown={setOpenDropdown}
-          />
+        {/* Properties */}
+        <PropertyMultiSelect
+          options={filters.options.pscodes}
+          selected={filters.pscodes}
+          setSelected={filters.setPscodes}
+          dropdownId="props"
+          openDropdown={openDropdown}
+          setOpenDropdown={setOpenDropdown}
+        />
 
-          {/* Screen */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Screen</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.screenresult ?? ""}
-                onChange={(e) =>
-                  filters.setScreenresult(e.target.value || null)
-                }
-              >
-                <option value="">Any</option>
-                {filters.options.screenresults.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </div>
+        {/* Screen */}
+        <div className="flex flex-col">
+          <div className="text-xs text-zinc-500 mb-1">Screen</div>
+          <div className="relative">
+            <select
+              className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+              value={filters.screenresult ?? ""}
+              onChange={(e) =>
+                filters.setScreenresult(e.target.value || null)
+              }
+            >
+              <option value="">Any</option>
+              {filters.options.screenresults.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
           </div>
-
-          {/* Collections */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Collections</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.collections}
-                onChange={(e) => filters.setCollections(e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="with">With Balance</option>
-                <option value="without">No Balance</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Evicted */}
-          <div className="flex flex-col">
-            <div className="text-xs text-zinc-500 mb-1">Evicted</div>
-            <div className="relative">
-              <select
-                className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
-                value={filters.evicted}
-                onChange={(e) => filters.setEvicted(e.target.value)}
-              >
-                <option value="any">Any</option>
-                <option value="Yes">Yes</option>
-                <option value="No">No</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="flex-1" />
-
-          <button
-            onClick={doExportPNG}
-            className="self-start px-4 py-2 rounded-xl border bg-zinc-900 text-white text-sm shadow-sm hover:opacity-90"
-          >
-            Export PNG
-          </button>
         </div>
 
-        {/* DASH CONTENT */}
-        <div className="flex flex-col gap-4">
-          {/* KPI CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">Late-payment rate</div>
-              <div className="text-3xl font-semibold">
-                {snapshot ? pct(snapshot.pct_late_payers) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">NSF count</div>
-              <div className="text-3xl font-semibold">
-                {snapshot ? num(snapshot.nsf_count) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">Collections exposure</div>
-              <div className="text-3xl font-semibold">
-                ${snapshot ? num(snapshot.collections_exposure) : "--"}
-              </div>
-            </div>
-            <div className="rounded-2xl border p-4 shadow-sm">
-              <div className="text-sm text-zinc-500">$ delinquent</div>
-              <div className="text-3xl font-semibold">
-                ${snapshot ? num(snapshot.dollars_delinquent) : "--"}
-              </div>
+        {/* Collections */}
+        <div className="flex flex-col">
+          <div className="text-xs text-zinc-500 mb-1">Collections</div>
+          <div className="relative">
+            <select
+              className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+              value={filters.collections}
+              onChange={(e) => filters.setCollections(e.target.value)}
+            >
+              <option value="any">Any</option>
+              <option value="with">With Balance</option>
+              <option value="without">No Balance</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Evicted */}
+        <div className="flex flex-col">
+          <div className="text-xs text-zinc-500 mb-1">Evicted</div>
+          <div className="relative">
+            <select
+              className="rounded-xl border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm min-w-[8rem] hover:bg-zinc-50"
+              value={filters.evicted}
+              onChange={(e) => filters.setEvicted(e.target.value)}
+            >
+              <option value="any">Any</option>
+              <option value="Yes">Yes</option>
+              <option value="No">No</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={doExportPNG}
+          className="self-start px-4 py-2 rounded-xl border bg-zinc-900 text-white text-sm shadow-sm hover:opacity-90"
+        >
+          Export PNG
+        </button>
+      </div>
+
+      {/* DASH CONTENT */}
+      <div className="flex flex-col gap-4">
+        {/* KPI CARDS */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-2xl border p-4 shadow-sm">
+            <div className="text-sm text-zinc-500">Late-payment rate</div>
+            <div className="text-3xl font-semibold">
+              {snapshot ? pct(snapshot.pct_late_payers) : "--"}
             </div>
           </div>
+          <div className="rounded-2xl border p-4 shadow-sm">
+            <div className="text-sm text-zinc-500">NSF count</div>
+            <div className="text-3xl font-semibold">
+              {snapshot ? num(snapshot.nsf_count) : "--"}
+            </div>
+          </div>
+          <div className="rounded-2xl border p-4 shadow-sm">
+            <div className="text-sm text-zinc-500">Total delinquent exposure</div>
+            <div className="text-3xl font-semibold">
+              ${snapshot ? num(snapshot.collections_exposure) : "--"}
+            </div>
+          </div>
+        </div>
 
-          {/* CHARTS */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Late-payment rate over time */}
+        {/* CHARTS */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Late-payment rate over time */}
+          <div className="lg:col-span-1">
             <ChartCard title="Late-payment rate over time">
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={series}>
@@ -621,8 +616,10 @@ export function PortfolioView() {
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>
+          </div>
 
-            {/* NSF count over time */}
+          {/* NSF count over time */}
+          <div className="lg:col-span-1">
             <ChartCard title="NSF count over time">
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={series}>
@@ -645,59 +642,41 @@ export function PortfolioView() {
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>
+          </div>
 
-            {/* Collections exposure over time */}
-            <ChartCard title="Collections exposure over time">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis />
-                  <Tooltip labelFormatter={tooltipLabelFormatter} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="collections_exposure"
-                    name="Collections"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
-
-            {/* $ delinquent over time */}
-            <ChartCard title="Delinquent over time ($)">
-              <ResponsiveContainer width="100%" height={260}>
-                <LineChart data={series}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="month"
-                    ticks={yearTicks}
-                    tickFormatter={xTickFormatterYearOnly}
-                  />
-                  <YAxis />
-                  <Tooltip labelFormatter={tooltipLabelFormatter} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="dollars_delinquent"
-                    name="$ delinquent"
-                    dot={false}
-                    stroke="#0A1A33"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </ChartCard>
+          {/* Total delinquent exposure over time – centered */}
+          <div className="lg:col-span-2 flex justify-center">
+            <div className="w-full lg:w-2/3">
+              <ChartCard title="Total delinquent exposure over time ($)">
+                <ResponsiveContainer width="100%" height={260}>
+                  <LineChart data={series}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis
+                      dataKey="month"
+                      ticks={yearTicks}
+                      tickFormatter={xTickFormatterYearOnly}
+                    />
+                    <YAxis />
+                    <Tooltip labelFormatter={tooltipLabelFormatter} />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="dollars_delinquent"
+                      name="Total delinquent exposure"
+                      dot={false}
+                      stroke="#0A1A33"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </ChartCard>
+            </div>
           </div>
         </div>
       </div>
-    </div> // end outer scroll container
-  );
+    </div>
+  </div> // end outer scroll container
+);
+
 }
 
 function ChartCard({ title, children }) {

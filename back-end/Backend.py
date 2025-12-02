@@ -601,6 +601,13 @@ def filter_options():
 # KPI queries with positive dollar magnitudes
 # -------------------------------------------------
 def _query_snapshot(where_clause, vals):
+    """
+    Aggregate portfolio-level KPIs over the filtered window.
+
+    collections_exposure  = sum of dollars sent to collections
+    dollars_delinquent    = total delinquent exposure
+                            = collections_exposure + rent/non-rent write-offs
+    """
     q = f"""
         WITH base AS (
             SELECT {_bucketsql()} AS month_key,
@@ -617,8 +624,14 @@ def _query_snapshot(where_clause, vals):
           COALESCE(SUM(CASE WHEN dnumlate > 0 THEN 1 ELSE 0 END),0)::float
             / NULLIF(COUNT(*),0) AS pct_late_payers,
           COALESCE(SUM(dnumnsf),0) AS nsf_count,
-          ABS(COALESCE(SUM(damoutcollections),0)) AS collections_exposure,
-          ABS(COALESCE(SUM(drentwrittenoff) + SUM(dnonrentwrittenoff), 0)) AS dollars_delinquent
+          -- dollars currently in collections
+          ABS(COALESCE(SUM(damoutcollections), 0)) AS collections_exposure,
+          -- total delinquent exposure = collections + write-offs
+          ABS(
+            COALESCE(SUM(damoutcollections), 0)
+            + COALESCE(SUM(drentwrittenoff), 0)
+            + COALESCE(SUM(dnonrentwrittenoff), 0)
+          ) AS dollars_delinquent
         FROM base;
     """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -627,7 +640,15 @@ def _query_snapshot(where_clause, vals):
     return row
 
 
+
 def _query_timeseries(where_clause, vals):
+    """
+    Monthly time-series for portfolio KPIs.
+
+    collections_exposure  = sum of dollars sent to collections
+    dollars_delinquent    = total delinquent exposure
+                            = collections_exposure + rent/non-rent write-offs
+    """
     q = f"""
         WITH base AS (
             SELECT {_bucketsql()} AS month_key,
@@ -644,8 +665,14 @@ def _query_timeseries(where_clause, vals):
           COALESCE(SUM(CASE WHEN dnumlate > 0 THEN 1 ELSE 0 END),0)::float
             / NULLIF(COUNT(*),0) AS pct_late_payers,
           COALESCE(SUM(dnumnsf),0) AS nsf_count,
-          ABS(COALESCE(SUM(damoutcollections),0)) AS collections_exposure,
-          ABS(COALESCE(SUM(drentwrittenoff) + SUM(dnonrentwrittenoff), 0)) AS dollars_delinquent
+          -- dollars currently in collections
+          ABS(COALESCE(SUM(damoutcollections), 0)) AS collections_exposure,
+          -- total delinquent exposure = collections + write-offs
+          ABS(
+            COALESCE(SUM(damoutcollections), 0)
+            + COALESCE(SUM(drentwrittenoff), 0)
+            + COALESCE(SUM(dnonrentwrittenoff), 0)
+          ) AS dollars_delinquent
         FROM base
         GROUP BY month_key
         ORDER BY month_key;
@@ -653,6 +680,7 @@ def _query_timeseries(where_clause, vals):
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(q, vals)
         return cur.fetchall()
+
 
 
 # -------------------------------------------------
