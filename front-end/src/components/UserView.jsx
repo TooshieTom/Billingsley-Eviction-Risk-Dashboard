@@ -1021,11 +1021,15 @@ function PropertyDetail({
   const [selectedFilter, setSelectedFilter] = useState("Risk Score");
   const [selectedSign, setSelectedSign] = useState("Greater");
 
-  // Quick search (top of table)
+  // Quick search (top of table) – shared across both views
   const [tenantSearch, setTenantSearch] = useState("");
   const [unitSearch, setUnitSearch] = useState("");
 
-  const [filteredTenants, setFilteredTenants] = useState(null);
+  // Separate filtered lists per view
+  const [filteredScreeningTenants, setFilteredScreeningTenants] =
+    useState(null);
+  const [filteredTransactionTenants, setFilteredTransactionTenants] =
+    useState(null);
 
   useEffect(() => {
     console.log("Selected tenants:", selectedTenants);
@@ -1051,60 +1055,91 @@ function PropertyDetail({
     return !Number.isNaN(d.getTime()) && d >= MIN_DATE_2024;
   });
 
-  // Apply numeric + code filters (screening view only)
+  // Apply filters for whichever view is active
   const applyFilter = () => {
-    let filtered = screeningBase;
-
-    const fieldKey = fieldMap[selectedFilter]; // actual object key
     const valueStr = String(userInput ?? "").trim();
     const valNum = Number(valueStr);
 
-    const hasNumericFilter =
-      fieldKey && valueStr !== "" && Number.isFinite(valNum);
     const hasTenantFilter = tenantSearch.trim().length > 0;
     const hasUnitFilter = unitSearch.trim().length > 0;
 
-    // Numeric field filter
-    if (hasNumericFilter) {
-      filtered = filtered.filter((t) => {
-        const v = t[fieldKey];
-        if (v == null) return false;
-        switch (selectedSign) {
-          case "Greater":
-            return v > valNum;
-          case "Less":
-            return v < valNum;
-          default:
-            return true;
-        }
-      });
-    }
+    if (viewMode === "screening") {
+      let filtered = screeningBase;
 
-    // Tenant code filter
-    if (hasTenantFilter) {
-      const search = tenantSearch.toLowerCase();
-      filtered = filtered.filter((t) => {
-        const code = (t.tscode || "").toString().toLowerCase();
-        return code.includes(search);
-      });
-    }
+      const fieldKey = fieldMap[selectedFilter]; // actual object key
+      const hasNumericFilter =
+        fieldKey && valueStr !== "" && Number.isFinite(valNum);
 
-    // Unit code filter
-    if (hasUnitFilter) {
-      const search = unitSearch.toLowerCase();
-      filtered = filtered.filter((t) => {
-        const code = (t.uscode || "").toString().toLowerCase();
-        return code.includes(search);
-      });
-    }
+      // Numeric field filter (screening only)
+      if (hasNumericFilter) {
+        filtered = filtered.filter((t) => {
+          const v = t[fieldKey];
+          if (v == null) return false;
+          switch (selectedSign) {
+            case "Greater":
+              return v > valNum;
+            case "Less":
+              return v < valNum;
+            default:
+              return true;
+          }
+        });
+      }
 
-    // If nothing is actually filtering, clear instead of keeping a copy
-    if (!hasNumericFilter && !hasTenantFilter && !hasUnitFilter) {
-      setFilteredTenants(null);
-      return;
-    }
+      // Tenant code filter
+      if (hasTenantFilter) {
+        const search = tenantSearch.toLowerCase();
+        filtered = filtered.filter((t) => {
+          const code = (t.tscode || "").toString().toLowerCase();
+          return code.includes(search);
+        });
+      }
 
-    setFilteredTenants(filtered);
+      // Unit code filter
+      if (hasUnitFilter) {
+        const search = unitSearch.toLowerCase();
+        filtered = filtered.filter((t) => {
+          const code = (t.uscode || "").toString().toLowerCase();
+          return code.includes(search);
+        });
+      }
+
+      // If nothing actually filtering, clear instead of keeping a copy
+      if (!hasNumericFilter && !hasTenantFilter && !hasUnitFilter) {
+        setFilteredScreeningTenants(null);
+        return;
+      }
+
+      setFilteredScreeningTenants(filtered);
+    } else {
+      // TRANSACTIONS VIEW – only tenant/unit filters (no numeric side-panel)
+      let filtered = transactionBase;
+
+      // Tenant code filter
+      if (hasTenantFilter) {
+        const search = tenantSearch.toLowerCase();
+        filtered = filtered.filter((t) => {
+          const code = (t.tscode || "").toString().toLowerCase();
+          return code.includes(search);
+        });
+      }
+
+      // Unit code filter
+      if (hasUnitFilter) {
+        const search = unitSearch.toLowerCase();
+        filtered = filtered.filter((t) => {
+          const code = (t.uscode || "").toString().toLowerCase();
+          return code.includes(search);
+        });
+      }
+
+      if (!hasTenantFilter && !hasUnitFilter) {
+        setFilteredTransactionTenants(null);
+        return;
+      }
+
+      setFilteredTransactionTenants(filtered);
+    }
   };
 
   const clearFilters = () => {
@@ -1113,20 +1148,21 @@ function PropertyDetail({
     setUserInput("");
     setTenantSearch("");
     setUnitSearch("");
-    setFilteredTenants(null);
+    setFilteredScreeningTenants(null);
+    setFilteredTransactionTenants(null);
   };
 
   // Property-level stats for each model
   const screeningOverallStats = computePropertyStats(screeningBase);
   const screeningFilteredStats = computePropertyStats(
-    filteredTenants || screeningBase
+    filteredScreeningTenants || screeningBase
   );
   const transactionStats = computePropertyStats(transactionBase);
 
   const hasScreeningFilterApplied =
-    Array.isArray(filteredTenants) &&
-    filteredTenants.length > 0 &&
-    filteredTenants.length !== screeningBase.length;
+    Array.isArray(filteredScreeningTenants) &&
+    filteredScreeningTenants.length > 0 &&
+    filteredScreeningTenants.length !== screeningBase.length;
 
   // Decide which tenants to show based on view
   const baseTenants =
@@ -1134,8 +1170,8 @@ function PropertyDetail({
 
   const tenantsToRender =
     viewMode === "screening"
-      ? filteredTenants || screeningBase
-      : transactionBase;
+      ? filteredScreeningTenants || screeningBase
+      : filteredTransactionTenants || transactionBase;
 
   // ALWAYS sort highest → lowest by eviction risk score
   const tenantsSorted = [...tenantsToRender].sort((a, b) => {
@@ -1286,37 +1322,35 @@ function PropertyDetail({
                 </div>
               </div>
 
-              {/* Quick tenant/unit search inputs (screening view) */}
-              {viewMode === "screening" && (
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  <input
-                    type="text"
-                    placeholder="Tenant code search"
-                    value={tenantSearch}
-                    onChange={(e) => setTenantSearch(e.target.value)}
-                    className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Unit code search"
-                    value={unitSearch}
-                    onChange={(e) => setUnitSearch(e.target.value)}
-                    className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
-                  />
-                  <button
-                    onClick={applyFilter}
-                    className="rounded-md bg-[#0A1A33] px-3 py-1 text-xs font-semibold text-white hover:bg-[#14284e]"
-                  >
-                    Apply
-                  </button>
-                  <button
-                    onClick={clearFilters}
-                    className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
-                  >
-                    Clear
-                  </button>
-                </div>
-              )}
+              {/* Quick tenant/unit search inputs – now for BOTH views */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <input
+                  type="text"
+                  placeholder="Tenant code search"
+                  value={tenantSearch}
+                  onChange={(e) => setTenantSearch(e.target.value)}
+                  className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
+                />
+                <input
+                  type="text"
+                  placeholder="Unit code search"
+                  value={unitSearch}
+                  onChange={(e) => setUnitSearch(e.target.value)}
+                  className="w-32 rounded-md border px-2 py-1 text-xs focus:border-[#0A1A33] focus:outline-none"
+                />
+                <button
+                  onClick={applyFilter}
+                  className="rounded-md bg-[#0A1A33] px-3 py-1 text-xs font-semibold text-white hover:bg-[#14284e]"
+                >
+                  Apply
+                </button>
+                <button
+                  onClick={clearFilters}
+                  className="rounded-md border border-zinc-300 px-3 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50"
+                >
+                  Clear
+                </button>
+              </div>
             </div>
 
             <div className="max-h-[440px] overflow-auto">
@@ -1536,7 +1570,7 @@ function PropertyDetail({
             </div>
           </div>
 
-                    {/* Analytics: differs by model */}
+          {/* Analytics: differs by model */}
           <div className="rounded-2xl border bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-black">
@@ -1636,7 +1670,6 @@ function PropertyDetail({
               </div>
             )}
           </div>
-
         </div>
 
         {/* Screening filters side panel */}
@@ -1737,11 +1770,6 @@ function PropertyDetail({
     </div>
   );
 }
-
-
-
-
-
 
 export function PropertyView({ selectedTenants, setSelectedTenants }) {
   const [selectedProperty, setSelectedProperty] = useState(null);
