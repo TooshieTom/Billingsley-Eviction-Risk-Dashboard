@@ -1924,10 +1924,21 @@ function AtRiskView({ selectedTenants }) {
 
   // Pretty-print driver values based on feature + model
     // Pretty-print driver values based on feature + model
-  function formatDriverValue(featureKey, rawValue, model) {
+    function formatDriverValue(featureKey, rawValue, model) {
     if (rawValue == null) return "—";
+
+    // New: categorical driver (payment source)
+    if (featureKey === "spaymentsource") {
+      if (typeof rawValue === "string" && rawValue.trim().length > 0) {
+        return rawValue;
+      }
+      return "—";
+    }
+
     const numeric = Number(rawValue);
-    if (!Number.isFinite(numeric)) return "—";
+    if (!Number.isFinite(numeric)) {
+      return "—";
+    }
 
     // Shared count / duration features
     if (featureKey === "dnumlate" || featureKey === "dnumnsf") {
@@ -1935,6 +1946,14 @@ function AtRiskView({ selectedTenants }) {
     }
     if (featureKey === "davgdayslate" || featureKey === "tenure_days") {
       return `${numeric.toFixed(0)} days`;
+    }
+
+    // New: day-of-month and payment-source changes
+    if (featureKey === "daypaid") {
+      return `Day ${numeric.toFixed(0)}`;
+    }
+    if (featureKey === "dpaysourcechange") {
+      return `${numeric.toFixed(0)}`;
     }
 
     // Screening model features (raw screening columns)
@@ -1964,6 +1983,7 @@ function AtRiskView({ selectedTenants }) {
     }
     return numeric.toFixed(1);
   }
+
 
 
   const TenantCard = ({ tenantData, model }) => {

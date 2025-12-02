@@ -988,6 +988,11 @@ def _compute_transaction_model_payload():
     Train a CatBoost model on historical transaction data to predict eviction,
     then return 0–100 eviction risk scores for the 2024+ cohort,
     grouped by property code, with per-tenant top driver features.
+
+    Now includes:
+      - daypaid (numeric)
+      - dpaysourcechange (numeric)
+      - spaymentsource (categorical)
     """
     q = """
     SELECT
@@ -1008,6 +1013,9 @@ def _compute_transaction_model_payload():
         srent,
         sfulfilledterm,
         dincome,
+        daypaid,
+        spaymentsource,
+        dpaysourcechange,
         sevicted
     FROM transacts
     WHERE pscode IS NOT NULL
@@ -1105,10 +1113,11 @@ def _compute_transaction_model_payload():
         "srent",
         "dincome",
         "late_ratio",
-        "renewed_flag",
-        "fulfilled_flag",
         "rent_to_income",
         "tenure_days",
+        "daypaid",
+        "dpaysourcechange",
+        "spaymentsource",
     ]
 
     # Only keep columns actually present
@@ -1121,10 +1130,6 @@ def _compute_transaction_model_payload():
     if not FEATURES:
         return {}
 
-    # ------------------------------------------------------------------
-    # NEW: compute baselines & spread for interpretable driver features
-    #      using the "low-risk" (label=0) training subset.
-    # ------------------------------------------------------------------
     # ------------------------------------------------------------------
     # Driver candidates – subset of FEATURES, with "worse than baseline"
     # direction encoded per feature.
@@ -1150,6 +1155,18 @@ def _compute_transaction_model_payload():
             "label": "Tenure length (days)",
             "direction": "low",  # shorter tenure = worse
         },
+        "daypaid": {
+            "label": "Day-of-month paid",
+            "direction": "high",  # later in month = worse
+        },
+        "dpaysourcechange": {
+            "label": "Payment-source changes",
+            "direction": "high",  # more changes = worse
+        },
+        "spaymentsource": {
+            "label": "Payment source",
+            "direction": "category",  # different than low-risk norm = worse
+        },
     }
 
     # Safety: only keep drivers that are actually in the model feature set
@@ -1158,12 +1175,25 @@ def _compute_transaction_model_payload():
     low_risk_train = train_df[train_df["label"] == 0]
     baseline = {}
     spread = {}
+
     if not low_risk_train.empty:
-        for col in driver_specs.keys():
+        for col, spec in driver_specs.items():
             if col not in low_risk_train.columns:
                 continue
-            series = pd.to_numeric(low_risk_train[col], errors="coerce")
-            series = series.dropna()
+
+            # Categorical baseline (e.g., spaymentsource)
+            if isinstance(spec, dict) and spec.get("direction") == "category":
+                series_raw = low_risk_train[col].dropna()
+                if series_raw.empty:
+                    continue
+                mode_val = series_raw.mode()
+                if not mode_val.empty:
+                    baseline[col] = str(mode_val.iloc[0])
+                    spread[col] = None
+                continue
+
+            # Numeric baseline (median + std)
+            series = pd.to_numeric(low_risk_train[col], errors="coerce").dropna()
             if series.empty:
                 continue
             baseline[col] = float(series.median())
@@ -1178,9 +1208,9 @@ def _compute_transaction_model_payload():
     X_test = test_df[FEATURES].copy()
     y_test = test_df["label"].copy()  # target for eval set
 
-    # Simple numeric imputation
+    # Simple numeric / categorical imputation
     for col in FEATURES:
-        if X_train[col].dtype.kind in "biufc":
+        if X_train[col].dtype.kind in "biufc":  # numeric
             median = X_train[col].median()
             X_train[col] = X_train[col].fillna(median)
             X_test[col] = X_test[col].fillna(median)
@@ -1190,7 +1220,13 @@ def _compute_transaction_model_payload():
             X_train[col] = X_train[col].fillna(fill_value)
             X_test[col] = X_test[col].fillna(fill_value)
 
-    cat_features_idx = []  # no categoricals currently
+    # Mark categorical features for CatBoost
+    cat_features_idx = []
+    for idx, col in enumerate(FEATURES):
+        if X_train[col].dtype.kind not in "biufc":
+            cat_features_idx.append(idx)
+            X_train[col] = X_train[col].astype("string")
+            X_test[col] = X_test[col].astype("string")
 
     train_pool = Pool(X_train, label=y_train, cat_features=cat_features_idx)
     test_pool = Pool(X_test, label=y_test, cat_features=cat_features_idx)
@@ -1218,7 +1254,7 @@ def _compute_transaction_model_payload():
         importances = model.get_feature_importance(train_pool)
 
         # Exclude features you don't want to show in the global top-drivers strip
-        EXCLUDED_GLOBAL_TX_DRIVERS = {"fulfilled_flag"}
+        EXCLUDED_GLOBAL_TX_DRIVERS = {"fulfilled_flag", "renewed_flag"}
 
         pairs = [
             (name, imp)
@@ -1292,12 +1328,17 @@ def _compute_transaction_model_payload():
                 "damoutcollections": _safe_float_value(row.get("damoutcollections")),
                 "drentwrittenoff": _safe_float_value(row.get("drentwrittenoff")),
                 "dnonrentwrittenoff": _safe_float_value(row.get("dnonrentwrittenoff")),
-                # Per-tenant top drivers (existing)
+                # New raw fields for potential UI use/debug
+                "daypaid": _safe_int_value(row.get("daypaid")),
+                "dpaysourcechange": _safe_int_value(row.get("dpaysourcechange")),
+                "spaymentsource": row.get("spaymentsource"),
+                # Per-tenant top drivers (now can include daypaid/dpaysourcechange/spaymentsource)
                 "drivers": top_drivers,
             }
         )
 
     return out
+
 
 
 def _compute_screening_model_payload():
@@ -1981,11 +2022,13 @@ def _compute_top_drivers(row, driver_specs, baseline, spread, max_drivers=3):
     driver_specs : dict
         Either {feature_name: "Label"} or
         {feature_name: {"label": ..., "direction": ...}} where
-        direction ∈ {"high", "low", "distance"}.
+        direction ∈ {"high", "low", "distance", "category"}.
     baseline : dict
-        Mapping feature_name -> baseline (e.g., median for low-risk tenants).
+        Mapping feature_name -> baseline (e.g., median or modal value for
+        low-risk tenants).
     spread : dict
-        Mapping feature_name -> scale (std-dev) used to normalize differences.
+        Mapping feature_name -> scale (std-dev) used to normalize differences
+        (ignored for "category" direction).
     max_drivers : int
         Maximum number of drivers to return.
 
@@ -2021,6 +2064,27 @@ def _compute_top_drivers(row, driver_specs, baseline, spread, max_drivers=3):
         if pd.isna(val) or pd.isna(base):
             continue
 
+        # --- Categorical case: compare category vs baseline category
+        if direction == "category":
+            val_str = str(val)
+            base_str = str(base)
+            # If same as low-risk baseline, not a "driver"
+            if val_str == base_str:
+                continue
+
+            impact = 1.0  # treat any deviation from baseline as a unit impact
+            drivers.append(
+                {
+                    "feature_key": feature_key,
+                    "feature_label": label,
+                    "value": val_str,
+                    "baseline": base_str,
+                    "impact_score": float(impact),
+                }
+            )
+            continue
+
+        # --- Numeric path (existing behavior, with "high"/"low"/"distance") ---
         try:
             v_float = float(val)
             b_float = float(base)
@@ -2066,6 +2130,7 @@ def _compute_top_drivers(row, driver_specs, baseline, spread, max_drivers=3):
     drivers.sort(key=lambda d: d["impact_score"], reverse=True)
     return drivers[:max_drivers]
 
+
 def _pretty_transaction_feature_label(name: str) -> str:
     """
     Human-readable labels for transaction-model features.
@@ -2081,6 +2146,9 @@ def _pretty_transaction_feature_label(name: str) -> str:
         "fulfilled_flag": "Fulfilled lease term flag",
         "rent_to_income": "Rent-to-income ratio",
         "tenure_days": "Tenure length (days)",
+        "daypaid": "Day-of-month paid",
+        "dpaysourcechange": "Payment-source changes",
+        "spaymentsource": "Payment source",
     }
     if name in mapping:
         return mapping[name]
@@ -2090,6 +2158,7 @@ def _pretty_transaction_feature_label(name: str) -> str:
     if not label:
         return name
     return label[0].upper() + label[1:]
+
 
 
 def _pretty_screening_feature_label(raw: str) -> str:
