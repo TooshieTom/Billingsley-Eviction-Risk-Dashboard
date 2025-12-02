@@ -1183,6 +1183,37 @@ def _compute_transaction_model_payload():
 
     model.fit(train_pool, eval_set=test_pool, use_best_model=True)
 
+    # ------------------------------------------------------------------
+    # Global top drivers for the transaction model (feature importance)
+    # ------------------------------------------------------------------
+    try:
+        importances = model.get_feature_importance(train_pool)
+
+        # Exclude features you don't want to show in the global top-drivers strip
+        EXCLUDED_GLOBAL_TX_DRIVERS = {"fulfilled_flag"}
+
+        pairs = [
+            (name, imp)
+            for name, imp in zip(FEATURES, importances)
+            if name not in EXCLUDED_GLOBAL_TX_DRIVERS
+        ]
+        pairs.sort(key=lambda x: x[1], reverse=True)
+
+        global_tx_drivers = []
+        for feat_name, imp in pairs[:3]:
+            global_tx_drivers.append(
+                {
+                    "feature_key": feat_name,
+                    "feature_label": _pretty_transaction_feature_label(feat_name),
+                    "importance": float(imp),
+                }
+            )
+
+        _TRANSACTION_MODEL_CACHE["global_drivers"] = global_tx_drivers
+    except Exception as e:
+        print(f"Could not compute global transaction drivers: {e}")
+        _TRANSACTION_MODEL_CACHE["global_drivers"] = []
+
     y_proba_test = model.predict_proba(test_pool)[:, 1]
     risk_score_0_100 = (y_proba_test * 100).round(1)
 
@@ -1734,6 +1765,34 @@ def _compute_screening_model_payload():
     )
 
     # ------------------------------------------------------------------
+    # Global top drivers for the screening model (feature importance)
+    # ------------------------------------------------------------------
+    try:
+        from catboost import Pool as CBPool
+
+        train_pool = CBPool(X_train_cb, label=y_train, cat_features=cat_idx)
+        importances = cb_model.get_feature_importance(train_pool)
+        feat_names = list(X_train_cb.columns)
+
+        pairs = list(zip(feat_names, importances))
+        pairs.sort(key=lambda x: x[1], reverse=True)
+
+        global_screen_drivers = []
+        for feat_name, imp in pairs[:3]:
+            global_screen_drivers.append(
+                {
+                    "feature_key": feat_name,
+                    "feature_label": _pretty_screening_feature_label(feat_name),
+                    "importance": float(imp),
+                }
+            )
+
+        _SCREENING_MODEL_CACHE["global_drivers"] = global_screen_drivers
+    except Exception as e:
+        print(f"Could not compute global screening drivers: {e}")
+        _SCREENING_MODEL_CACHE["global_drivers"] = []
+
+    # ------------------------------------------------------------------
     # 3. Scoring cohort: 2024+ tenants with screening rows
     # ------------------------------------------------------------------
     q_score = """
@@ -1952,6 +2011,74 @@ def _compute_top_drivers(row, driver_specs, baseline, spread, max_drivers=3):
 
     drivers.sort(key=lambda d: d["impact_score"], reverse=True)
     return drivers[:max_drivers]
+
+def _pretty_transaction_feature_label(name: str) -> str:
+    """
+    Human-readable labels for transaction-model features.
+    """
+    mapping = {
+        "dnumnsf": "NSF count",
+        "dnumlate": "Late payment count",
+        "davgdayslate": "Average days late",
+        "srent": "Monthly rent",
+        "dincome": "Reported income",
+        "late_ratio": "Late-payments / NSF ratio",
+        "renewed_flag": "Renewed lease flag",
+        "fulfilled_flag": "Fulfilled lease term flag",
+        "rent_to_income": "Rent-to-income ratio",
+        "tenure_days": "Tenure length (days)",
+    }
+    if name in mapping:
+        return mapping[name]
+
+    # Fallback: unsnake
+    label = name.replace("_", " ").strip()
+    if not label:
+        return name
+    return label[0].upper() + label[1:]
+
+
+def _pretty_screening_feature_label(raw: str) -> str:
+    """
+    Human-readable labels for screening-model features.
+    If it's a log_ feature (log_xxx), strip 'log_' so we show the
+    underlying variable, not the normalized/logged one.
+    """
+    if not raw:
+        return raw
+
+    base = raw
+    if base.startswith("log_"):
+        base = base[4:]   # strip 'log_'
+
+    mapping = {
+        "risk_score": "Screening risk score",
+        "rent_to_income_ratio": "Rent-to-income ratio",
+        "debt_to_income_ratio": "Debt-to-income ratio",
+        "debt_to_credit_ratio": "Debt-to-credit ratio",
+        "income": "Reported income",
+        "total_debt": "Total debt",
+        "total_scorable_debt": "Total scorable debt",
+        "application_monthly_income": "Application monthly income",
+        "application_total_debt_policy": "Application total debt (policy)",
+        "avg_risk_score": "Average risk score",
+        "primary_income_share": "Primary income share",
+        "current_emp_tenure_months": "Current employment tenure (months)",
+        "current_res_tenure_months": "Current residence tenure (months)",
+        "previous_emp_tenure_months": "Previous employment tenure (months)",
+        "previous_res_tenure_months": "Previous residence tenure (months)",
+        "has_student_debt": "Has student debt flag",
+        "has_medical_debt": "Has medical debt flag",
+    }
+
+    if base in mapping:
+        return mapping[base]
+
+    # Last-resort fallback: unsnake and capitalize
+    label = base.replace("_", " ").strip()
+    if not label:
+        label = raw
+    return label[0].upper() + label[1:]
 
 
 
@@ -2226,6 +2353,69 @@ def get_tenants():
     except Exception as e:
         return jsonify({'Error': str(e)}), 500
 
+@app.route("/models/global-drivers", methods=["GET"])
+def models_global_drivers():
+    """
+    Return the overall top drivers of eviction risk for each model
+    (screening + transactions), based on CatBoost feature importance.
+
+    Shape:
+      {
+        "screening": {
+          "top_drivers": [
+            { "feature_key": ..., "feature_label": ..., "importance": float },
+            ...
+          ]
+        },
+        "transactions": {
+          "top_drivers": [
+            { "feature_key": ..., "feature_label": ..., "importance": float },
+            ...
+          ]
+        }
+      }
+    """
+    try:
+        current_ts = _latest_meta_ts()
+
+        # Warm transaction model cache if needed
+        if (
+            _TRANSACTION_MODEL_CACHE.get("payload") is None
+            or _TRANSACTION_MODEL_CACHE.get("last_meta_ts") != current_ts
+        ):
+            tx_payload = _compute_transaction_model_payload()
+            _TRANSACTION_MODEL_CACHE["payload"] = tx_payload
+            _TRANSACTION_MODEL_CACHE["last_meta_ts"] = current_ts
+
+        # Warm screening model cache if needed
+        if (
+            _SCREENING_MODEL_CACHE.get("payload") is None
+            or _SCREENING_MODEL_CACHE.get("last_meta_ts") != current_ts
+        ):
+            sc_payload = _compute_screening_model_payload()
+            _SCREENING_MODEL_CACHE["payload"] = sc_payload
+            _SCREENING_MODEL_CACHE["last_meta_ts"] = current_ts
+
+        screening_drivers = _SCREENING_MODEL_CACHE.get("global_drivers", []) or []
+        tx_drivers = _TRANSACTION_MODEL_CACHE.get("global_drivers", []) or []
+
+        return jsonify(
+            {
+                "screening": {"top_drivers": screening_drivers},
+                "transactions": {"top_drivers": tx_drivers},
+            }
+        ), 200
+
+    except Exception as e:
+        print(f"Global drivers error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify(
+            {
+                "screening": {"top_drivers": []},
+                "transactions": {"top_drivers": []},
+            }
+        ), 200
 
 # -------------------------------------------------
 # Health

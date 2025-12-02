@@ -318,12 +318,6 @@ export function PortfolioView() {
   const [snapshot, setSnapshot] = useState(null);
   const [series, setSeries] = useState([]);
 
-  // feature importance now loads separately, once, without blocking filters
-  const [topFeatures, setTopFeatures] = useState({
-    auc: null,
-    top_features: [],
-  });
-
   const [openDropdown, setOpenDropdown] = useState(null);
 
   // THIS IS NOW THE *INNER* CONTENT WRAPPER (not the scroll container)
@@ -360,33 +354,6 @@ export function PortfolioView() {
     };
   }, [debouncedQS]);
 
-  // Fetch feature importance JUST ONCE on mount.
-  // This still calls the backend route, but it's no longer on every filter change.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const featRes = await fetch("http://127.0.0.1:5000/features/importance", {
-          method: "GET",
-          mode: "cors",
-          headers: { "Content-Type": "application/json" },
-        });
-        const featJson = featRes.ok
-          ? await featRes.json()
-          : { auc: null, top_features: [] };
-
-        if (!alive) return;
-        setTopFeatures(featJson);
-      } catch (err) {
-        if (!alive) return;
-        console.error("Feature importance fetch error:", err);
-        setTopFeatures({ auc: null, top_features: [] });
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // formatting helpers
   const num = (n) => (n ?? 0).toLocaleString();
@@ -726,44 +693,6 @@ export function PortfolioView() {
                 </LineChart>
               </ResponsiveContainer>
             </ChartCard>
-          </div>
-
-          {/* FEATURE IMPORTANCE */}
-          <div className="rounded-2xl border p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-sm text-zinc-500">
-                  Primary Eviction Risk Drivers (tentative model)
-                </div>
-                <div className="text-2xl font-semibold">
-                  {topFeatures.auc != null
-                    ? `Top drivers (AUC ${Math.round(topFeatures.auc * 100) / 100
-                    })`
-                    : "Top drivers"}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-              {topFeatures.top_features?.slice(0, 6).map((f) => (
-                <div
-                  key={`${f.feature}`}
-                  className="flex items-center justify-between rounded-xl border px-3 py-2 text-sm shadow-sm"
-                >
-                  <div className="text-sm">{f.feature}</div>
-                  <div className="text-sm font-semibold">
-                    {Math.round(f.importance * 1000) / 10}%
-                  </div>
-                </div>
-              ))}
-
-              {(!topFeatures.top_features ||
-                topFeatures.top_features.length === 0) && (
-                  <div className="text-zinc-500 text-sm">
-                    Not enough data to compute predictors.
-                  </div>
-                )}
-            </div>
           </div>
         </div>
       </div>
@@ -1678,8 +1607,48 @@ export function PropertyView({ selectedTenants, setSelectedTenants }) {
   return <PropertyList onPropertySelect={setSelectedProperty} />;
 }
 function AtRiskView({ selectedTenants }) {
+  const [globalDrivers, setGlobalDrivers] = useState({
+    screening: { top_drivers: [] },
+    transactions: { top_drivers: [] },
+  });
+  const [globalDriversLoading, setGlobalDriversLoading] = useState(true);
+
   const [highlightedTenant, setHighlightedTenant] = useState(null);
   const [hoveredTenantCode, setHoveredTenantCode] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        const res = await fetch(
+          "http://127.0.0.1:5000/models/global-drivers"
+        );
+        const json = res.ok ? await res.json() : {};
+        if (!alive) return;
+
+        setGlobalDrivers({
+          screening: json.screening || { top_drivers: [] },
+          transactions: json.transactions || { top_drivers: [] },
+        });
+      } catch (err) {
+        if (!alive) return;
+        console.error("Global drivers fetch error:", err);
+        setGlobalDrivers({
+          screening: { top_drivers: [] },
+          transactions: { top_drivers: [] },
+        });
+      } finally {
+        if (!alive) return;
+        setGlobalDriversLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
 
   // Split selected tenants by model type
   const transactionTenants = selectedTenants
@@ -1928,10 +1897,116 @@ function AtRiskView({ selectedTenants }) {
     </div>
   );
 
-  return (
-    <div className="flex w-full h-full gap-x-6">
-      {renderGrid(screeningTenants, "Screening Insights", "screening")}
-      {renderGrid(transactionTenants, "Transaction Insights", "transactions")}
+    return (
+    <div className="flex w-full h-full flex-col gap-y-4">
+      {/* GLOBAL TOP DRIVERS STRIP */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Screening model global drivers */}
+        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Screening model
+              </div>
+              <div className="text-sm text-zinc-700">
+                Top eviction risk drivers (overall)
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            {globalDriversLoading ? (
+              <div className="text-xs text-zinc-400">
+                Loading drivers…
+              </div>
+            ) : globalDrivers.screening.top_drivers &&
+              globalDrivers.screening.top_drivers.length > 0 ? (
+              globalDrivers.screening.top_drivers.slice(0, 3).map((d) => {
+                const total =
+                  globalDrivers.screening.top_drivers.reduce(
+                    (sum, x) => sum + (x.importance || 0),
+                    0
+                  ) || 1;
+                const pct = (d.importance || 0) / total;
+
+                return (
+                  <div
+                    key={`screening-${d.feature_key}`}
+                    className="flex-1 rounded-xl bg-zinc-50 px-3 py-2 shadow-sm"
+                  >
+                    <div className="text-[11px] text-zinc-500 truncate">
+                      {d.feature_label}
+                    </div>
+                    <div className="text-lg font-semibold text-[#0A1A33]">
+                      {(pct * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-xs text-zinc-400">
+                Not enough data to compute screening drivers.
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Transaction model global drivers */}
+        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                Transaction model
+              </div>
+              <div className="text-sm text-zinc-700">
+                Top eviction risk drivers (overall)
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-2">
+            {globalDriversLoading ? (
+              <div className="text-xs text-zinc-400">
+                Loading drivers…
+              </div>
+            ) : globalDrivers.transactions.top_drivers &&
+              globalDrivers.transactions.top_drivers.length > 0 ? (
+              globalDrivers.transactions.top_drivers.slice(0, 3).map((d) => {
+                const total =
+                  globalDrivers.transactions.top_drivers.reduce(
+                    (sum, x) => sum + (x.importance || 0),
+                    0
+                  ) || 1;
+                const pct = (d.importance || 0) / total;
+
+                return (
+                  <div
+                    key={`tx-${d.feature_key}`}
+                    className="flex-1 rounded-xl bg-zinc-50 px-3 py-2 shadow-sm"
+                  >
+                    <div className="text-[11px] text-zinc-500 truncate">
+                      {d.feature_label}
+                    </div>
+                    <div className="text-lg font-semibold text-[#0A1A33]">
+                      {(pct * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="text-xs text-zinc-400">
+                Not enough data to compute transaction drivers.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* EXISTING AT-RISK TENANT GRIDS */}
+      <div className="flex flex-1 gap-x-6 min-h-0">
+        {renderGrid(screeningTenants, "Screening Insights", "screening")}
+        {renderGrid(transactionTenants, "Transaction Insights", "transactions")}
+      </div>
     </div>
   );
 }
