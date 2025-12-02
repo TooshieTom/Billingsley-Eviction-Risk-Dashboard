@@ -899,6 +899,127 @@ function formatRiskScore(score) {
   return numeric.toFixed(1);
 }
 
+// Aggregate per-property stats from a list of tenants
+// Aggregate per-property stats from a list of tenants
+function computePropertyStats(tenants) {
+  if (!Array.isArray(tenants) || tenants.length === 0) {
+    return {
+      count: 0,
+      nsf: 0,
+      late: 0,
+      collections: 0,
+    };
+  }
+
+  let nsf = 0;
+  let late = 0;
+  let collections = 0;
+
+  for (const t of tenants) {
+    // NSF count (dnumnsf from transacts / model payloads)
+    nsf += Number(
+      t.nsf_count ??
+      t.dnumnsf ??
+      0
+    );
+
+    // Late payment count (dnumlate from transacts / model payloads)
+    late += Number(
+      t.late_count ??
+      t.dnumlate ??
+      0
+    );
+
+    // Collections amount → from damoutcollections in transacts/model payloads
+    const rawCollections =
+      t.collections_amount ??
+      t.damoutcollections ??
+      t.collections_exposure ??
+      t.collections ??
+      0;
+
+    // Always aggregate as positive dollars
+    const collNum = Number(rawCollections);
+    if (Number.isFinite(collNum)) {
+      collections += Math.abs(collNum);
+    }
+  }
+
+  return {
+    count: tenants.length,
+    nsf,
+    late,
+    collections,
+  };
+}
+
+
+// Simple count formatter
+function formatCount(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "–";
+  return n.toLocaleString();
+}
+
+// Currency formatter (no decimals)
+function formatCurrency(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "–";
+  return `$${n.toLocaleString(undefined, {
+    maximumFractionDigits: 0,
+  })}`;
+}
+
+// Percent of whole, with 1 decimal place
+function formatPercent(part, whole) {
+  const p = Number(part);
+  const w = Number(whole);
+  if (!Number.isFinite(p) || !Number.isFinite(w) || w <= 0) {
+    return "0%";
+  }
+  const pct = (p / w) * 100;
+  return `${pct.toFixed(1)}%`;
+}
+
+// Small card component for the analytics section
+// Small card component for the analytics section
+function renderMetricCard(title, value, subtitle) {
+  return (
+    <div className="rounded-xl border bg-zinc-50 p-4 shadow-sm flex flex-col">
+      <div className="text-[11px] font-medium tracking-wide text-zinc-500 uppercase">
+        {title}
+      </div>
+      <div className="mt-2 text-2xl font-semibold text-[#0A1A33]">
+        {value}
+      </div>
+      {subtitle && (
+        <div className="mt-1 text-[11px] text-zinc-400">{subtitle}</div>
+      )}
+    </div>
+  );
+}
+
+// Filtered-vs-total card (big filtered number, then "/ total")
+function renderFilteredMetricCard(title, filteredValue, totalValue, subtitle) {
+  return (
+    <div className="rounded-xl border bg-zinc-50 p-4 shadow-sm flex flex-col">
+      <div className="text-[11px] font-medium tracking-wide text-zinc-500 uppercase">
+        {title}
+      </div>
+      <div className="mt-2 flex items-baseline gap-1">
+        <span className="text-2xl font-semibold text-[#0A1A33]">
+          {filteredValue}
+        </span>
+        <span className="text-sm text-zinc-500">/ {totalValue}</span>
+      </div>
+      {subtitle && (
+        <div className="mt-1 text-[11px] text-zinc-400">{subtitle}</div>
+      )}
+    </div>
+  );
+}
+
+
 function PropertyDetail({
   property,
   onBack,
@@ -972,8 +1093,6 @@ function PropertyDetail({
         switch (selectedSign) {
           case "Greater":
             return v > valNum;
-          case "Equal":
-            return v === valNum;
           case "Less":
             return v < valNum;
           default:
@@ -1018,6 +1137,18 @@ function PropertyDetail({
     setFilteredTenants(null);
   };
 
+  // Property-level stats for each model
+  const screeningOverallStats = computePropertyStats(screeningBase);
+  const screeningFilteredStats = computePropertyStats(
+    filteredTenants || screeningBase
+  );
+  const transactionStats = computePropertyStats(transactionBase);
+
+  const hasScreeningFilterApplied =
+    Array.isArray(filteredTenants) &&
+    filteredTenants.length > 0 &&
+    filteredTenants.length !== screeningBase.length;
+
   // Decide which tenants to show based on view
   const baseTenants =
     viewMode === "screening" ? screeningBase : transactionBase;
@@ -1043,14 +1174,12 @@ function PropertyDetail({
   const handleSelectTenant = (tenant, name) => {
     setSelectedTenants((prev) => {
       const exists = prev.some(
-        (t) =>
-          t.tenant.tscode === tenant.tscode && t.model === viewMode
+        (t) => t.tenant.tscode === tenant.tscode && t.model === viewMode
       );
 
       if (exists) {
         return prev.filter(
-          (t) =>
-            !(t.tenant.tscode === tenant.tscode && t.model === viewMode)
+          (t) => !(t.tenant.tscode === tenant.tscode && t.model === viewMode)
         );
       }
 
@@ -1108,20 +1237,22 @@ function PropertyDetail({
               <button
                 type="button"
                 onClick={() => setViewMode("screening")}
-                className={`rounded-full px-3 py-1 font-medium transition ${viewMode === "screening"
-                  ? "bg-[#0A1A33] text-white shadow-sm"
-                  : "text-zinc-700 hover:text-black"
-                  }`}
+                className={`rounded-full px-3 py-1 font-medium transition ${
+                  viewMode === "screening"
+                    ? "bg-[#0A1A33] text-white shadow-sm"
+                    : "text-zinc-700 hover:text-black"
+                }`}
               >
                 Screening
               </button>
               <button
                 type="button"
                 onClick={() => setViewMode("transactions")}
-                className={`rounded-full px-3 py-1 font-medium transition ${viewMode === "transactions"
-                  ? "bg-[#0A1A33] text-white shadow-sm"
-                  : "text-zinc-700 hover:text-black"
-                  }`}
+                className={`rounded-full px-3 py-1 font-medium transition ${
+                  viewMode === "transactions"
+                    ? "bg-[#0A1A33] text-white shadow-sm"
+                    : "text-zinc-700 hover:text-black"
+                }`}
               >
                 Transactions
               </button>
@@ -1154,8 +1285,9 @@ function PropertyDetail({
       <div className="flex flex-1">
         {/* Table + analytics */}
         <div
-          className={`flex-1 p-6 transition-all duration-300 ${filtersActive ? "mr-80" : "mr-0"
-            }`}
+          className={`flex-1 p-6 transition-all duration-300 ${
+            filtersActive ? "mr-80" : "mr-0"
+          }`}
         >
           {/* Tenants table card */}
           <div className="mb-6 rounded-2xl border bg-white shadow-sm">
@@ -1170,8 +1302,8 @@ function PropertyDetail({
                   {loading
                     ? "Loading tenants…"
                     : hasTenants
-                      ? `${baseTenants.length} tenants in this view`
-                      : "No tenants in this view"}
+                    ? `${baseTenants.length} tenants in this view`
+                    : "No tenants in this view"}
                 </div>
               </div>
 
@@ -1254,9 +1386,9 @@ function PropertyDetail({
                       const unitCode = (tenant.uscode || "").toString();
                       const isSelected = selectedTenants.some(
                         (t) =>
-                          t.tenant.tscode === tenant.tscode && t.model === viewMode
+                          t.tenant.tscode === tenant.tscode &&
+                          t.model === viewMode
                       );
-
 
                       // CREDIT risk score from screening data
                       const creditRisk = tenant.riskscore;
@@ -1293,8 +1425,8 @@ function PropertyDetail({
                               <td className="px-3 py-3 text-sm text-[#0A1A33]">
                                 {tenant.dtmovein
                                   ? new Date(
-                                    tenant.dtmovein
-                                  ).toLocaleDateString()
+                                      tenant.dtmovein
+                                    ).toLocaleDateString()
                                   : "—"}
                               </td>
 
@@ -1307,26 +1439,22 @@ function PropertyDetail({
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.totdebt != null
                                   ? Number(
-                                    tenant.totdebt
-                                  ).toLocaleString()
+                                      tenant.totdebt
+                                    ).toLocaleString()
                                   : "—"}
                               </td>
 
                               {/* Rent-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.rentincratio != null
-                                  ? `${(tenant.rentincratio).toFixed(
-                                    1
-                                  )}%`
+                                  ? `${tenant.rentincratio.toFixed(1)}%`
                                   : "—"}
                               </td>
 
                               {/* Debt-to-income */}
                               <td className="px-3 py-3 text-right text-sm text-[#0A1A33]">
                                 {tenant.debtincratio != null
-                                  ? `${(tenant.debtincratio).toFixed(
-                                    1
-                                  )}%`
+                                  ? `${tenant.debtincratio.toFixed(1)}%`
                                   : "—"}
                               </td>
 
@@ -1345,12 +1473,16 @@ function PropertyDetail({
                               <td className="px-3 py-3 text-center">
                                 <button
                                   onClick={() =>
-                                    handleSelectTenant(tenant, property.propertyName)
+                                    handleSelectTenant(
+                                      tenant,
+                                      property.propertyName
+                                    )
                                   }
-                                  className={`h-6 w-8 rounded-md border transition-all ${isSelected
-                                    ? "border-[#0A1A33] bg-[#0A1A33]"
-                                    : "border-gray-300 hover:border-[#0A1A33]"
-                                    }`}
+                                  className={`h-6 w-8 rounded-md border transition-all ${
+                                    isSelected
+                                      ? "border-[#0A1A33] bg-[#0A1A33]"
+                                      : "border-gray-300 hover:border-[#0A1A33]"
+                                  }`}
                                   title={
                                     isSelected
                                       ? "Remove from at-risk list"
@@ -1365,13 +1497,13 @@ function PropertyDetail({
                               <td className="px-3 py-3 text-sm text-[#0A1A33]">
                                 {tenant.lease_start
                                   ? new Date(
-                                    tenant.lease_start
-                                  ).toLocaleDateString()
+                                      tenant.lease_start
+                                    ).toLocaleDateString()
                                   : tenant.dtmovein
-                                    ? new Date(
+                                  ? new Date(
                                       tenant.dtmovein
                                     ).toLocaleDateString()
-                                    : "—"}
+                                  : "—"}
                               </td>
 
                               {/* COLORED eviction risk (0–100) */}
@@ -1388,12 +1520,16 @@ function PropertyDetail({
                               <td className="px-3 py-3 text-center">
                                 <button
                                   onClick={() =>
-                                    handleSelectTenant(tenant, property.propertyName)
+                                    handleSelectTenant(
+                                      tenant,
+                                      property.propertyName
+                                    )
                                   }
-                                  className={`h-6 w-8 rounded-md border transition-all ${isSelected
-                                    ? "border-[#0A1A33] bg-[#0A1A33]"
-                                    : "border-gray-300 hover:border-[#0A1A33]"
-                                    }`}
+                                  className={`h-6 w-8 rounded-md border transition-all ${
+                                    isSelected
+                                      ? "border-[#0A1A33] bg-[#0A1A33]"
+                                      : "border-gray-300 hover:border-[#0A1A33]"
+                                  }`}
                                   title={
                                     isSelected
                                       ? "Remove from at-risk list"
@@ -1421,24 +1557,116 @@ function PropertyDetail({
             </div>
           </div>
 
-          {/* Analytics placeholder */}
+                    {/* Analytics: differs by model */}
           <div className="rounded-2xl border bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-black">Analytics</h3>
-              <span className="text-xs text-zinc-500">Coming soon</span>
+              <h3 className="text-sm font-semibold text-black">
+                {viewMode === "transactions"
+                  ? "Property analytics – transaction model"
+                  : "Property analytics – screening model"}
+              </h3>
+              <span className="text-xs text-zinc-500">
+                {viewMode === "transactions"
+                  ? "NSF, late payments, and collections for this property"
+                  : hasScreeningFilterApplied
+                  ? "Filtered tenants vs all screening tenants"
+                  : "All screening tenants at this property"}
+              </span>
             </div>
-            <p className="mt-4 text-sm text-zinc-500">
-              Graphs and charts for this property will be displayed here.
-            </p>
+
+            {viewMode === "transactions" ? (
+              transactionStats.count === 0 ? (
+                <p className="mt-4 text-sm text-zinc-500">
+                  No transaction model tenants with payment / collections data
+                  for this property.
+                </p>
+              ) : (
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {renderMetricCard(
+                    "Late payments",
+                    formatCount(transactionStats.late)
+                  )}
+                  {renderMetricCard(
+                    "NSF count",
+                    formatCount(transactionStats.nsf)
+                  )}
+                  {renderMetricCard(
+                    "Collections amount",
+                    formatCurrency(transactionStats.collections)
+                  )}
+                </div>
+              )
+            ) : screeningOverallStats.count === 0 ? (
+              <p className="mt-4 text-sm text-zinc-500">
+                No screening tenants with payment / collections data for this
+                property.
+              </p>
+            ) : (
+              // SCREENING ANALYTICS: always exactly 3 cards total
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Late payments */}
+                {hasScreeningFilterApplied
+                  ? renderFilteredMetricCard(
+                      "Late payments",
+                      formatCount(screeningFilteredStats.late),
+                      formatCount(screeningOverallStats.late),
+                      `${formatPercent(
+                        screeningFilteredStats.late,
+                        screeningOverallStats.late
+                      )} of property late payments`
+                    )
+                  : renderMetricCard(
+                      "Late payments",
+                      formatCount(screeningOverallStats.late),
+                      "All screening tenants"
+                    )}
+
+                {/* NSF count */}
+                {hasScreeningFilterApplied
+                  ? renderFilteredMetricCard(
+                      "NSF count",
+                      formatCount(screeningFilteredStats.nsf),
+                      formatCount(screeningOverallStats.nsf),
+                      `${formatPercent(
+                        screeningFilteredStats.nsf,
+                        screeningOverallStats.nsf
+                      )} of property NSF`
+                    )
+                  : renderMetricCard(
+                      "NSF count",
+                      formatCount(screeningOverallStats.nsf),
+                      "All screening tenants"
+                    )}
+
+                {/* Collections amount */}
+                {hasScreeningFilterApplied
+                  ? renderFilteredMetricCard(
+                      "Collections",
+                      formatCurrency(screeningFilteredStats.collections),
+                      formatCurrency(screeningOverallStats.collections),
+                      `${formatPercent(
+                        screeningFilteredStats.collections,
+                        screeningOverallStats.collections
+                      )} of property collections amount`
+                    )
+                  : renderMetricCard(
+                      "Collections",
+                      formatCurrency(screeningOverallStats.collections),
+                      "All screening tenants"
+                    )}
+              </div>
+            )}
           </div>
+
         </div>
 
         {/* Screening filters side panel */}
         <div
-          className={`absolute right-0 top-0 h-full w-80 transform bg-white shadow-md transition-all duration-300 ease-out ${filtersActive
-            ? "pointer-events-auto translate-x-0 opacity-100"
-            : "pointer-events-none translate-x-full opacity-0"
-            }`}
+          className={`absolute right-0 top-0 h-full w-80 transform bg-white shadow-md transition-all duration-300 ease-out ${
+            filtersActive
+              ? "pointer-events-auto translate-x-0 opacity-100"
+              : "pointer-events-none translate-x-full opacity-0"
+          }`}
         >
           <div className="flex h-full flex-col p-6">
             <div className="mb-4 flex items-center justify-between">
@@ -1492,7 +1720,6 @@ function PropertyDetail({
                   className="mt-1 w-full rounded-md border px-2 py-1 text-sm focus:border-[#0A1A33] focus:outline-none"
                 >
                   <option value="Greater">Greater than</option>
-                  <option value="Equal">Equal to</option>
                   <option value="Less">Less than</option>
                 </select>
               </div>
@@ -1531,6 +1758,7 @@ function PropertyDetail({
     </div>
   );
 }
+
 
 
 

@@ -1256,8 +1256,15 @@ def _compute_transaction_model_payload():
                 "dtmoveout": dtmoveout_val.isoformat()
                 if pd.notna(dtmoveout_val)
                 else None,
+                # 0–100 eviction risk score from transaction model
                 "eviction_risk_score": float(row.get("eviction_risk_score") or 0.0),
-                # NEW: top driver features for at-risk view
+                # Per-tenant payment / collections metrics (for property analytics)
+                "dnumnsf": _safe_int_value(row.get("dnumnsf")),
+                "dnumlate": _safe_int_value(row.get("dnumlate")),
+                "damoutcollections": _safe_float_value(row.get("damoutcollections")),
+                "drentwrittenoff": _safe_float_value(row.get("drentwrittenoff")),
+                "dnonrentwrittenoff": _safe_float_value(row.get("dnonrentwrittenoff")),
+                # Per-tenant top drivers (existing)
                 "drivers": top_drivers,
             }
         )
@@ -1802,6 +1809,11 @@ def _compute_screening_model_payload():
             t.uscode,
             t.dtmovein,
             t.dtmoveout,
+            t.dnumnsf,
+            t.dnumlate,
+            t.damoutcollections,
+            t.drentwrittenoff,
+            t.dnonrentwrittenoff,
             s.*
         FROM transacts t
         INNER JOIN screening s
@@ -1811,6 +1823,7 @@ def _compute_screening_model_payload():
           AND t.dtmovein IS NOT NULL
           AND t.dtmovein >= DATE '2024-01-01';
     """
+
     score_df_raw = pd.read_sql(q_score, conn)
 
     if score_df_raw.empty:
@@ -1835,11 +1848,17 @@ def _compute_screening_model_payload():
         "uscode",
         "dtmovein",
         "dtmoveout",
+        "dnumnsf",
+        "dnumlate",
+        "damoutcollections",
+        "drentwrittenoff",
+        "dnonrentwrittenoff",
         "riskscore",
         "totdebt",
         "rentincratio",
         "debtincratio",
     ]
+
     meta_cols = [c for c in meta_cols if c in score_df_raw.columns]
     meta_df = score_df_raw[meta_cols].copy()
 
@@ -1901,13 +1920,20 @@ def _compute_screening_model_payload():
             "uscode": row.get("uscode"),
             "dtmovein": _to_iso(dtmovein_val),
             "dtmoveout": _to_iso(dtmoveout_val),
+            # Screening-table fields
             "riskscore": _safe_float(row.get("riskscore")),
             "totdebt": _safe_float(row.get("totdebt")),
             "rentincratio": _safe_float(row.get("rentincratio")),
             "debtincratio": _safe_float(row.get("debtincratio")),
+            # Joined-in payment / collections metrics from transacts
+            "dnumnsf": _safe_int_value(row.get("dnumnsf")),
+            "dnumlate": _safe_int_value(row.get("dnumlate")),
+            "damoutcollections": _safe_float_value(row.get("damoutcollections")),
+            "drentwrittenoff": _safe_float_value(row.get("drentwrittenoff")),
+            "dnonrentwrittenoff": _safe_float_value(row.get("dnonrentwrittenoff")),
             # Screening-model eviction risk, scaled 0–100
             "eviction_risk_score": float(scores_0_100[i]),
-            # NEW: top three driver features for at-risk view
+            # Per-tenant top three driver features for at-risk view
             "drivers": top_drivers,
         }
 
@@ -2080,6 +2106,34 @@ def _pretty_screening_feature_label(raw: str) -> str:
         label = raw
     return label[0].upper() + label[1:]
 
+def _safe_int_value(v):
+    """
+    Convert a value to a plain Python int for JSON (NaN/None -> 0).
+    """
+    try:
+        if v is None or (isinstance(v, (float, np.floating)) and np.isnan(v)):
+            return 0
+    except Exception:
+        pass
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float_value(v):
+    """
+    Convert a value to a plain Python float for JSON (NaN/None -> 0.0).
+    """
+    try:
+        if v is None or (isinstance(v, (float, np.floating)) and np.isnan(v)):
+            return 0.0
+    except Exception:
+        pass
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # @app.route("/upload", methods=["POST"])
