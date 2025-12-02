@@ -959,7 +959,7 @@ def _compute_transaction_model_payload():
     """
     Train a CatBoost model on historical transaction data to predict eviction,
     then return 0–100 eviction risk scores for the 2024+ cohort,
-    grouped by property code.
+    grouped by property code, with per-tenant top driver features.
     """
     q = """
     SELECT
@@ -998,7 +998,7 @@ def _compute_transaction_model_payload():
             df[col] = pd.to_datetime(df[col], errors="coerce")
 
     # Binary label from sevicted
-    def _map_flag(x):
+    def _map_flag_local(x):
         if x is None:
             return np.nan
         s = str(x).strip().lower()
@@ -1008,7 +1008,7 @@ def _compute_transaction_model_payload():
             return 0
         return np.nan
 
-    df["sevicted_flag"] = df["sevicted"].apply(_map_flag)
+    df["sevicted_flag"] = df["sevicted"].apply(_map_flag_local)
     df = df[~df["sevicted_flag"].isna()].copy()
     if len(df) < 100:
         # Not enough labeled data to train a reasonable model
@@ -1028,7 +1028,7 @@ def _compute_transaction_model_payload():
     train_df = df[df["start_year"] <= 2023].copy()
     test_df = df[df["start_year"] >= 2024].copy()
 
-    # NEW: further restrict scored cohort to move-ins in 2024+ (per your requirement)
+    # Further restrict scored cohort to move-ins in 2024+
     min_movein = pd.Timestamp("2024-01-01")
     if "dtmovein" in test_df.columns:
         test_df = test_df[test_df["dtmovein"] >= min_movein].copy()
@@ -1037,7 +1037,9 @@ def _compute_transaction_model_payload():
     if train_df.empty or test_df.empty:
         return {}
 
-    # Basic feature engineering (same for train/test)
+    # ------------------------------------------------------------------
+    # Feature engineering shared by train/test
+    # ------------------------------------------------------------------
     for df_ in (train_df, test_df):
         # Payment behavior ratios
         df_["late_ratio"] = (df_["dnumlate"] / df_["dnumnsf"]).replace(
@@ -1060,20 +1062,21 @@ def _compute_transaction_model_payload():
         )
 
         # Tenure as numeric
-        df_["tenure_days"] = (df_["dtmoveout"].fillna(pd.Timestamp("today")) - df_["dtmovein"]).dt.days
+        df_["tenure_days"] = (
+            df_["dtmoveout"].fillna(pd.Timestamp("today")) - df_["dtmovein"]
+        ).dt.days
 
+    # ------------------------------------------------------------------
+    # Features the transaction model is allowed to look at
+    # (no write-off / collections columns to avoid label leakage)
+    # ------------------------------------------------------------------
     candidate_cols = [
         "dnumnsf",
         "dnumlate",
         "davgdayslate",
-        "drentwrittenoff",
-        "dnonrentwrittenoff",
-        "damoutcollections",
         "srent",
         "dincome",
         "late_ratio",
-        "wo_total",
-        "collections_flag",
         "renewed_flag",
         "fulfilled_flag",
         "rent_to_income",
@@ -1090,10 +1093,62 @@ def _compute_transaction_model_payload():
     if not FEATURES:
         return {}
 
+    # ------------------------------------------------------------------
+    # NEW: compute baselines & spread for interpretable driver features
+    #      using the "low-risk" (label=0) training subset.
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Driver candidates – subset of FEATURES, with "worse than baseline"
+    # direction encoded per feature.
+    # ------------------------------------------------------------------
+    driver_specs = {
+        "dnumlate": {
+            "label": "Late payment count",
+            "direction": "high",  # more late payments = worse
+        },
+        "dnumnsf": {
+            "label": "NSF count",
+            "direction": "high",  # more NSFs = worse
+        },
+        "davgdayslate": {
+            "label": "Average days late",
+            "direction": "high",  # more days late = worse
+        },
+        "rent_to_income": {
+            "label": "Rent-to-income (%)",
+            "direction": "high",  # higher rent burden = worse
+        },
+        "tenure_days": {
+            "label": "Tenure length (days)",
+            "direction": "low",  # shorter tenure = worse
+        },
+    }
+
+    # Safety: only keep drivers that are actually in the model feature set
+    driver_specs = {k: v for k, v in driver_specs.items() if k in FEATURES}
+
+    low_risk_train = train_df[train_df["label"] == 0]
+    baseline = {}
+    spread = {}
+    if not low_risk_train.empty:
+        for col in driver_specs.keys():
+            if col not in low_risk_train.columns:
+                continue
+            series = pd.to_numeric(low_risk_train[col], errors="coerce")
+            series = series.dropna()
+            if series.empty:
+                continue
+            baseline[col] = float(series.median())
+            std_val = float(series.std(ddof=0))
+            spread[col] = std_val if std_val > 0 else None
+
+    # ------------------------------------------------------------------
+    # Model training
+    # ------------------------------------------------------------------
     X_train = train_df[FEATURES].copy()
     y_train = train_df["label"].copy()
     X_test = test_df[FEATURES].copy()
-    y_test = test_df["label"].copy()  # NEW: target for eval set
+    y_test = test_df["label"].copy()  # target for eval set
 
     # Simple numeric imputation
     for col in FEATURES:
@@ -1107,11 +1162,9 @@ def _compute_transaction_model_payload():
             X_train[col] = X_train[col].fillna(fill_value)
             X_test[col] = X_test[col].fillna(fill_value)
 
-    # If you ever add categoricals, list their indices here
-    cat_features_idx = []
+    cat_features_idx = []  # no categoricals currently
 
     train_pool = Pool(X_train, label=y_train, cat_features=cat_features_idx)
-    # NEW: test_pool now has labels, satisfying AUC requirement
     test_pool = Pool(X_test, label=y_test, cat_features=cat_features_idx)
 
     model = CatBoostClassifier(
@@ -1138,7 +1191,7 @@ def _compute_transaction_model_payload():
 
     # Build property -> tenants mapping (only 2024+ cohort)
     out = {}
-    for _, row in test_df.iterrows():
+    for idx, row in test_df.iterrows():
         pscode = row.get("pscode")
         if not pscode:
             continue
@@ -1149,6 +1202,15 @@ def _compute_transaction_model_payload():
         lease_start_val = row.get("lease_start")
         dtmovein_val = row.get("dtmovein")
         dtmoveout_val = row.get("dtmoveout")
+
+        # Per-tenant top drivers for the transaction model
+        top_drivers = _compute_top_drivers(
+            row,
+            driver_specs=driver_specs,
+            baseline=baseline,
+            spread=spread,
+            max_drivers=3,
+        )
 
         out[pscode].append(
             {
@@ -1164,10 +1226,13 @@ def _compute_transaction_model_payload():
                 if pd.notna(dtmoveout_val)
                 else None,
                 "eviction_risk_score": float(row.get("eviction_risk_score") or 0.0),
+                # NEW: top driver features for at-risk view
+                "drivers": top_drivers,
             }
         )
 
     return out
+
 
 def _compute_screening_model_payload():
     """
@@ -1175,24 +1240,9 @@ def _compute_screening_model_payload():
     label from transacts) to predict eviction (sevicted), then score the
     2024+ cohort that has screening data.
 
-    Returns:
-      {
-        pscode: [
-          {
-            "tscode": ...,
-            "uscode": ...,
-            "dtmovein": "YYYY-MM-DD",
-            "dtmoveout": "YYYY-MM-DD" | None,
-            "riskscore": float | None,
-            "totdebt": float | None,
-            "rentincratio": float | None,
-            "debtincratio": float | None,
-            "eviction_risk_score": float | None   # 0–100
-          },
-          ...
-        ],
-        ...
-      }
+    In addition to per-tenant eviction_risk_score, this function also
+    computes the top 3 driver features (with comparison to a low-risk
+    baseline) so the frontend at-risk view can show local explanations.
     """
     import pandas as pd
     import numpy as np
@@ -1300,6 +1350,30 @@ def _compute_screening_model_payload():
         "itemrev3": "item_to_review_3",
     }
 
+    # Which raw screening fields we want to expose as "driver" candidates
+    # Which raw screening fields we want to expose as "driver" candidates.
+    # These are also used as features in the screening model.
+    # `direction` tells _compute_top_drivers whether higher or lower
+    # than the low-risk baseline is considered worse.
+    SCREENING_DRIVER_SPECS = {
+        "riskscore": {
+            "label": "Screening risk score",
+            "direction": "low",  # lower score = worse (e.g., 0 vs 719)
+        },
+        "rentincratio": {
+            "label": "Rent-to-income (%)",
+            "direction": "high",  # higher ratio = worse
+        },
+        "debtincratio": {
+            "label": "Debt-to-income (%)",
+            "direction": "high",  # higher ratio = worse
+        },
+        "totdebt": {
+            "label": "Total debt ($)",
+            "direction": "high",  # more debt = worse
+        },
+    }
+
     def _prepare_screening_features(
         df_raw: pd.DataFrame,
         is_train: bool,
@@ -1336,7 +1410,7 @@ def _compute_screening_model_payload():
         date_cols_expected = ["applicant_credit_date", "date"]
         date_cols = [c for c in date_cols_expected if c in df.columns]
         for c in date_cols:
-            df[c] = pd.to_datetime(df[c], errors="coerce")
+            df[c] = pd.to_datetime(cast(df[c], "datetime64[ns]"), errors="coerce") if False else pd.to_datetime(df[c], errors="coerce")
 
         numeric_cols_expected = [
             "age",
@@ -1517,7 +1591,9 @@ def _compute_screening_model_payload():
         numeric_feature_candidates = [
             c for c in numeric_feature_candidates if c not in force_categorical
         ]
-        categorical_feature_candidates = categorical_feature_candidates + force_categorical
+        categorical_feature_candidates = (
+            categorical_feature_candidates + force_categorical
+        )
 
         # Drop redundant numeric inputs (keep derived features instead)
         optional_drop_numeric = [
@@ -1575,6 +1651,27 @@ def _compute_screening_model_payload():
     if train_df_raw.empty:
         return {}
 
+    # Baseline & spread for screening driver features (low-risk subset)
+    baseline_screen = {}
+    spread_screen = {}
+    try:
+        sev_series = clean_binary_flag(train_df_raw["sevicted"])
+        low_risk_train = train_df_raw[sev_series == 0].copy()
+        if not low_risk_train.empty:
+            for col in SCREENING_DRIVER_SPECS.keys():
+                if col not in low_risk_train.columns:
+                    continue
+                col_series = pd.to_numeric(low_risk_train[col], errors="coerce")
+                col_series = col_series.dropna()
+                if col_series.empty:
+                    continue
+                baseline_screen[col] = float(col_series.median())
+                std_val = float(col_series.std(ddof=0))
+                spread_screen[col] = std_val if std_val > 0 else None
+    except Exception:
+        baseline_screen = {}
+        spread_screen = {}
+
     X_all, y_all, feature_cols, cat_cols = _prepare_screening_features(
         train_df_raw, is_train=True
     )
@@ -1586,7 +1683,7 @@ def _compute_screening_model_payload():
         return {}
 
     # ------------------------------------------------------------------
-    # 2. Train/val/test split (60/20/20) and CatBoost model (NEW MODEL params)
+    # 2. Train/val/test split (60/20/20) and CatBoost model
     # ------------------------------------------------------------------
     X_train_full, X_test, y_train_full, y_test = train_test_split(
         X_all, y_all, test_size=0.2, random_state=42, stratify=y_all
@@ -1635,8 +1732,6 @@ def _compute_screening_model_payload():
         eval_set=(X_val_cb, y_val),
         use_best_model=True,
     )
-
-    # (Optional metrics: we skip printing to keep backend clean.)
 
     # ------------------------------------------------------------------
     # 3. Scoring cohort: 2024+ tenants with screening rows
@@ -1711,6 +1806,7 @@ def _compute_screening_model_payload():
     # 5. Build property -> tenants mapping payload
     # ------------------------------------------------------------------
     out = {}
+
     for i, (_, row) in enumerate(meta_df.iterrows()):
         pscode = row.get("pscode")
         if not pscode:
@@ -1727,11 +1823,19 @@ def _compute_screening_model_payload():
                 return d.date().isoformat()
             if isinstance(d, date):
                 return d.isoformat()
-            # fall back to string
             try:
                 return pd.to_datetime(d).date().isoformat()
             except Exception:
                 return None
+
+        # Per-tenant top drivers for screening model (based on raw screening cols)
+        top_drivers = _compute_top_drivers(
+            row,
+            driver_specs=SCREENING_DRIVER_SPECS,
+            baseline=baseline_screen,
+            spread=spread_screen,
+            max_drivers=3,
+        )
 
         tenant_entry = {
             "tscode": row.get("tscode"),
@@ -1742,13 +1846,112 @@ def _compute_screening_model_payload():
             "totdebt": _safe_float(row.get("totdebt")),
             "rentincratio": _safe_float(row.get("rentincratio")),
             "debtincratio": _safe_float(row.get("debtincratio")),
-            # NEW MODEL eviction risk, scaled 0–100
+            # Screening-model eviction risk, scaled 0–100
             "eviction_risk_score": float(scores_0_100[i]),
+            # NEW: top three driver features for at-risk view
+            "drivers": top_drivers,
         }
 
         out.setdefault(pscode, []).append(tenant_entry)
 
     return out
+
+
+def _compute_top_drivers(row, driver_specs, baseline, spread, max_drivers=3):
+    """
+    Generic helper to compute the top-N driver features for a single tenant.
+
+    Parameters
+    ----------
+    row : pandas.Series
+        Row containing all raw/engineered feature columns.
+    driver_specs : dict
+        Either {feature_name: "Label"} or
+        {feature_name: {"label": ..., "direction": ...}} where
+        direction ∈ {"high", "low", "distance"}.
+    baseline : dict
+        Mapping feature_name -> baseline (e.g., median for low-risk tenants).
+    spread : dict
+        Mapping feature_name -> scale (std-dev) used to normalize differences.
+    max_drivers : int
+        Maximum number of drivers to return.
+
+    Returns
+    -------
+    list[dict]
+        Each dict has: feature_key, feature_label, value, baseline, impact_score.
+        Only features where the tenant is *worse than* the low-risk baseline
+        (according to direction) are returned.
+    """
+    drivers = []
+
+    for feature_key, spec in driver_specs.items():
+        if feature_key not in row.index:
+            continue
+
+        # Interpret spec
+        if isinstance(spec, str):
+            label = spec
+            direction = "distance"
+        elif isinstance(spec, dict):
+            label = spec.get("label", feature_key)
+            direction = spec.get("direction", "distance")
+        else:
+            label = str(spec)
+            direction = "distance"
+
+        val = row.get(feature_key)
+        base = baseline.get(feature_key)
+
+        if val is None or base is None:
+            continue
+        if pd.isna(val) or pd.isna(base):
+            continue
+
+        try:
+            v_float = float(val)
+            b_float = float(base)
+        except (TypeError, ValueError):
+            continue
+
+        diff = v_float - b_float
+        scale = spread.get(feature_key)
+
+        # Normalize by spread if available
+        if scale is None or not np.isfinite(scale) or scale == 0:
+            norm_diff = diff
+        else:
+            norm_diff = diff / scale
+
+        # Orientation: only keep features where the tenant is "worse"
+        if direction == "high":
+            # higher than baseline is worse; ignore better-than-baseline
+            if norm_diff <= 0:
+                continue
+            impact = norm_diff
+        elif direction == "low":
+            # lower than baseline is worse
+            if norm_diff >= 0:
+                continue
+            impact = -norm_diff
+        else:  # "distance" – fall back to absolute difference
+            impact = abs(norm_diff)
+
+        if not np.isfinite(impact) or impact <= 0:
+            continue
+
+        drivers.append(
+            {
+                "feature_key": feature_key,
+                "feature_label": label,
+                "value": float(v_float),
+                "baseline": float(b_float),
+                "impact_score": float(impact),
+            }
+        )
+
+    drivers.sort(key=lambda d: d["impact_score"], reverse=True)
+    return drivers[:max_drivers]
 
 
 

@@ -1677,61 +1677,90 @@ export function PropertyView({ selectedTenants, setSelectedTenants }) {
   // You could surface `error` somewhere in UI if you want; keeping it silent for now
   return <PropertyList onPropertySelect={setSelectedProperty} />;
 }
-
 function AtRiskView({ selectedTenants }) {
   const [highlightedTenant, setHighlightedTenant] = useState(null);
   const [hoveredTenantCode, setHoveredTenantCode] = useState(null);
 
+  // Split selected tenants by model type
   const transactionTenants = selectedTenants
-    .filter(t => t.model === 'transactions')
+    .filter((t) => t.model === "transactions")
     .sort((a, b) => {
-      const codeA = a.tenant.tscode || '';
-      const codeB = b.tenant.tscode || '';
+      const codeA = a.tenant.tscode || "";
+      const codeB = b.tenant.tscode || "";
       return codeA.localeCompare(codeB);
     });
 
   const screeningTenants = selectedTenants
-    .filter(t => t.model === 'screening')
+    .filter((t) => t.model === "screening")
     .sort((a, b) => {
-      const codeA = a.tenant.tscode || '';
-      const codeB = b.tenant.tscode || '';
+      const codeA = a.tenant.tscode || "";
+      const codeB = b.tenant.tscode || "";
       return codeA.localeCompare(codeB);
     });
-
-  // Risk score class function
-  function riskScoreClasses(score) {
-    const numeric = Number(score);
-    if (!Number.isFinite(numeric)) {
-      return "bg-zinc-100 text-zinc-600";
-    }
-    if (numeric < 30) return "bg-emerald-100 text-emerald-800";
-    if (numeric < 60) return "bg-amber-100 text-amber-800";
-    if (numeric < 80) return "bg-orange-100 text-orange-800";
-    return "bg-red-100 text-red-800";
-  }
 
   function formatDate(dateString) {
     if (!dateString) return "—";
 
     const dateMatch = dateString.match(/^(\d{4})-(\d{2})-(\d{2})/);
-
     if (dateMatch) {
       const [, year, month, day] = dateMatch;
       return `${month}/${day}/${year}`;
     }
 
-    // Fallback! Parse as normal date
     try {
       const date = new Date(dateString);
       if (!isNaN(date.getTime())) {
-        return date.toLocaleDateString('en-US');
+        return date.toLocaleDateString("en-US");
       }
     } catch (e) {
-      // Do nothing
+      // ignore
     }
-
     return dateString;
   }
+
+  // Pretty-print driver values based on feature + model
+    // Pretty-print driver values based on feature + model
+  function formatDriverValue(featureKey, rawValue, model) {
+    if (rawValue == null) return "—";
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) return "—";
+
+    // Shared count / duration features
+    if (featureKey === "dnumlate" || featureKey === "dnumnsf") {
+      return numeric.toFixed(0);
+    }
+    if (featureKey === "davgdayslate" || featureKey === "tenure_days") {
+      return `${numeric.toFixed(0)} days`;
+    }
+
+    // Screening model features (raw screening columns)
+    if (model === "screening") {
+      if (featureKey === "rentincratio" || featureKey === "debtincratio") {
+        return `${numeric.toFixed(1)}%`;
+      }
+      if (featureKey === "totdebt") {
+        return `$${numeric.toLocaleString()}`;
+      }
+      if (featureKey === "riskscore") {
+        return numeric.toFixed(0);
+      }
+    }
+
+    // Transaction model engineered features
+    if (model === "transactions") {
+      if (featureKey === "rent_to_income") {
+        // stored as ratio 0–1, display as %
+        return `${(numeric * 100).toFixed(1)}%`;
+      }
+    }
+
+    // Generic fallback
+    if (Number.isInteger(numeric)) {
+      return numeric.toString();
+    }
+    return numeric.toFixed(1);
+  }
+
 
   const TenantCard = ({ tenantData, model }) => {
     const [hovered, setHovered] = useState(false);
@@ -1740,33 +1769,56 @@ function AtRiskView({ selectedTenants }) {
     const isHighlighted = highlightedTenant === tenant.tscode;
     const isHoveredMatch = hoveredTenantCode === tenant.tscode;
 
-    // Get eviction risk score (already formatted as 0-100)
-    const evictionRisk = tenant.eviction_risk_score
-      ? `${(tenant.eviction_risk_score).toFixed(1)}%`
+    // Eviction risk score (0–100)
+    const hasScore =
+      tenant.eviction_risk_score !== null &&
+      tenant.eviction_risk_score !== undefined &&
+      Number.isFinite(Number(tenant.eviction_risk_score));
+
+    const evictionRisk = hasScore
+      ? `${Number(tenant.eviction_risk_score).toFixed(1)}%`
       : "—";
+
+    // Per-tenant drivers from backend (at most 3)
+    const drivers = Array.isArray(tenant.drivers)
+      ? tenant.drivers.slice(0, 3)
+      : [];
 
     return (
       <div
-        className={`relative rounded-xl bg-white p-6 shadow-md transition-all duration-200 cursor-pointer hover:shadow-xl hover:-translate-y-1 flex flex-col justify-between ${isHighlighted ? 'ring-4 ring-[#0A1A33] shadow-2xl' : ''
-          }`}
+        className={`relative rounded-xl bg-white p-6 shadow-md transition-all duration-200 cursor-pointer hover:shadow-xl hover:-translate-y-1 flex flex-col justify-between ${
+          isHighlighted ? "ring-4 ring-[#0A1A33] shadow-2xl" : ""
+        }`}
         onMouseEnter={() => {
           setHovered(true);
           setHoveredTenantCode(tenant.tscode);
+          setHighlightedTenant(tenant.tscode);
         }}
         onMouseLeave={() => {
           setHovered(false);
           setHoveredTenantCode(null);
-        }}>
-        <div className={`flex flex-col justify-between h-full space-y-4 transition-opacity duration-200 ${hovered || isHoveredMatch ? 'opacity-0' : 'opacity-100'}`}>
+          setHighlightedTenant(null);
+        }}
+      >
+        {/* Front face: basic tenant info */}
+        <div
+          className={`flex flex-col justify-between h-full space-y-4 transition-opacity duration-200 ${
+            hovered || isHoveredMatch ? "opacity-0" : "opacity-100"
+          }`}
+        >
           {/* Header */}
           <div className="border-b-1 border-[#0A1A33] pb-3">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-md text-zinc-500 mb-1 font-bold">Tenant</p>
-                <p className="text-2xl text-[#0A1A33]">{tenant.tscode || "—"}</p>
+                <p className="text-2xl text-[#0A1A33]">
+                  {tenant.tscode || "—"}
+                </p>
               </div>
               <div className="flex flex-col items-end">
-                <p className="text-md text-zinc-500 mb-1 font-bold">Eviction Risk</p>
+                <p className="text-md text-zinc-500 mb-1 font-bold">
+                  Eviction Risk
+                </p>
                 <span
                   className={`inline-flex min-w-[4rem] items-center justify-center rounded-full px-3 py-1 text-xl font-bold ${riskScoreClasses(
                     tenant.eviction_risk_score
@@ -1784,90 +1836,80 @@ function AtRiskView({ selectedTenants }) {
             <p className="text-2xl text-[#0A1A33]">{tenant.uscode || "—"}</p>
           </div>
 
-          {/* Move In (Date) */}
+          {/* Move-in date */}
           <div className="border-b-1 border-[#0A1A33] w-1/6 pb-3" />
           <div className="flex-1 flex flex-col justify-center">
-            <p className="text-md text-zinc-500 mb-1 pt-3 font-bold">Move In</p>
-            <p className="text-2xl text-[#0A1A33]">{formatDate(tenant.dtmovein) || "—"}</p>
+            <p className="text-md text-zinc-500 mb-1 pt-3 font-bold">
+              Move In
+            </p>
+            <p className="text-2xl text-[#0A1A33]">
+              {formatDate(tenant.dtmovein) || "—"}
+            </p>
           </div>
 
-          {/* Property Location */}
+          {/* Property name */}
           <div className="border-b-1 border-[#0A1A33] w-1/6 pb-3" />
           <div className="flex-1 flex flex-col justify-center">
-            <p className="text-md text-zinc-500 mb-1 pt-3 font-bold">Property</p>
-            <p className="text-2xl text-[#0A1A33]">
-              {name || "—"}
+            <p className="text-md text-zinc-500 mb-1 pt-3 font-bold">
+              Property
             </p>
+            <p className="text-2xl text-[#0A1A33]">{name || "—"}</p>
           </div>
         </div>
 
+        {/* Back face: top risk drivers */}
         {(hovered || isHoveredMatch) && (
-          <div className="absolute inset-0 z-10 flex flex-col justify-between rounded-xl bg-gradient-to-br from-[#0A1A33] to-gray-900 text-white p-6">
-            {/* Placeholder (Risk Driver 1) */}
-            <div className="flex-1 flex flex-col justify-center">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-md font-bold text-gray-200">Driver Name</p>
-                  <p className="text-2xl mt-1">Driver Score</p>
+          <div className="absolute inset-0 z-10 flex flex-col rounded-xl bg-gradient-to-br from-[#0A1A33] to-gray-900 text-white p-6">
+            {drivers.length > 0 ? (
+              drivers.map((d, idx) => (
+                <div
+                  key={d.feature_key || `${tenant.tscode}-${idx}`}
+                  className={`flex flex-1 flex-col justify-center ${
+                    idx > 0 ? "border-t border-white/10 mt-4 pt-4" : ""
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-md font-bold text-gray-200">
+                        {d.feature_label}
+                      </p>
+                      <p className="text-2xl mt-1">
+                        {formatDriverValue(d.feature_key, d.value, model)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-md font-bold text-gray-200">
+                        Low-risk avg
+                      </p>
+                      <p className="text-2xl mt-1">
+                        {formatDriverValue(
+                          d.feature_key,
+                          d.baseline,
+                          model
+                        )}
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-md font-bold text-gray-200">&gt; Average</p>
-                  <p className="text-2xl mt-1">Average Driver Score</p>
-                </div>
+              ))
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <p className="text-sm text-gray-300 text-center">
+                  Not enough data yet to compute drivers for this tenant.
+                </p>
               </div>
-            </div>
-
-            {/* Placeholder (Risk Driver 2) */}
-            <div className="flex-1 flex flex-col justify-center">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-md font-bold text-gray-200">Driver Name</p>
-                  <p className="text-2xl mt-1">Driver Score</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-md font-bold text-gray-200">&gt; Average</p>
-                  <p className="text-2xl mt-1">Average Driver Score</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Placeholder (Risk Driver 3) */}
-            <div className="flex-1 flex flex-col justify-center">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-md font-bold text-gray-200">Driver Name</p>
-                  <p className="text-2xl mt-1">Driver Score</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-md font-bold text-gray-200">&gt; Average</p>
-                  <p className="text-2xl mt-1">Average Driver Score</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Placeholder (Risk Driver 4) */}
-            <div className="flex-1 flex flex-col justify-center">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-md font-bold text-gray-200">Driver Name</p>
-                  <p className="text-2xl mt-1">Driver Score</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-md font-bold text-gray-200">&gt; Average</p>
-                  <p className="text-2xl mt-1">Average Driver Score</p>
-                </div>
-              </div>
-            </div>
+            )}
           </div>
         )}
       </div>
     );
   };
 
-
   const renderGrid = (tenants, title, modelType) => (
     <div className="flex-1 p-6 bg-gray-100 rounded-lg overflow-scroll scrollbar-hide">
-      <h3 className="text-center text-3xl mb-4 text-[#0A1A33] italic">{title}</h3>
+      <h3 className="text-center text-3xl mb-4 text-[#0A1A33] italic">
+        {title}
+      </h3>
       <div className="grid grid-cols-2 gap-6">
         {tenants.length > 0 ? (
           tenants.map((tenantData, idx) => (
